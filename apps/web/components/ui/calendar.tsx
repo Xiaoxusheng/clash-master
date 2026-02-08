@@ -21,23 +21,23 @@ function Calendar({
       classNames={{
         root: "w-fit",
         months: "relative flex flex-col gap-4",
-        month: "relative space-y-4",
-        nav: "absolute inset-x-0 top-1 flex items-center justify-between px-1",
+        month: "grid grid-cols-[2rem_1fr_2rem] grid-rows-[2.25rem_auto] items-center gap-y-3",
+        nav: "contents",
         button_previous: cn(
           buttonVariants({ variant: "ghost" }),
-          "absolute left-1 top-1 h-7 w-7 bg-transparent p-0 opacity-70 hover:opacity-100",
+          "col-start-1 row-start-1 justify-self-start h-7 w-7 p-0 opacity-70 hover:opacity-100",
         ),
         button_next: cn(
           buttonVariants({ variant: "ghost" }),
-          "absolute right-1 top-1 h-7 w-7 bg-transparent p-0 opacity-70 hover:opacity-100",
+          "col-start-3 row-start-1 justify-self-end h-7 w-7 p-0 opacity-70 hover:opacity-100",
         ),
-        month_caption: "relative flex h-9 items-center justify-center px-8 pt-1",
+        month_caption: "col-start-2 row-start-1 flex h-9 items-center justify-center",
         caption_label: "text-sm font-medium",
         dropdowns: "flex items-center gap-1",
         dropdown_root:
           "relative has-focus:border-ring has-focus:ring-ring/50 border border-input shadow-xs has-focus:ring-[3px] rounded-md",
         dropdown: "absolute inset-0 opacity-0",
-        month_grid: "w-full border-collapse",
+        month_grid: "col-span-3 w-full border-collapse",
         weekdays: "flex",
         weekday:
           "text-muted-foreground rounded-md w-9 font-normal text-[0.8rem]",

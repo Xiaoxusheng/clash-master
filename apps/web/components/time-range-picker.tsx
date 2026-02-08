@@ -97,17 +97,34 @@ function formatDateButton(
   });
 }
 
-function formatDateTimeDisplayByLocale(
-  isoString: string,
-  localeCode: string,
-): string {
-  const date = new Date(isoString);
-  return date.toLocaleString(localeCode, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function formatCustomRangeDisplay(startIso: string, endIso: string): string {
+  const start = new Date(startIso);
+  const end = new Date(endIso);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return "";
+
+  const dateNoYear = (d: Date) => `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`;
+  const dateShortYear = (d: Date) =>
+    `${String(d.getFullYear()).slice(-2)}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`;
+  const time = (d: Date) => `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+
+  const sameDay =
+    start.getFullYear() === end.getFullYear() &&
+    start.getMonth() === end.getMonth() &&
+    start.getDate() === end.getDate();
+  if (sameDay) {
+    return `${dateNoYear(start)} ${time(start)}-${time(end)}`;
+  }
+
+  const sameYear = start.getFullYear() === end.getFullYear();
+  if (sameYear) {
+    return `${dateNoYear(start)} ${time(start)}-${dateNoYear(end)} ${time(end)}`;
+  }
+
+  return `${dateShortYear(start)} ${time(start)}-${dateShortYear(end)} ${time(end)}`;
 }
 
 export function TimeRangePicker({
@@ -158,16 +175,16 @@ export function TimeRangePicker({
   const [fromTime, setFromTime] = useState("00:00");
   const [toTime, setToTime] = useState("23:59");
 
-  const syncDraftFromValue = () => {
-    const start = new Date(value.start);
-    const end = new Date(value.end);
+  const syncDraftFromRange = (range: TimeRange) => {
+    const start = new Date(range.start);
+    const end = new Date(range.end);
     if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
       setFromDate(start);
       setToDate(end);
       setFromTime(toLocalTimeInputValue(start));
       setToTime(toLocalTimeInputValue(end));
     }
-    const inferredPreset = inferPresetFromRange(value);
+    const inferredPreset = inferPresetFromRange(range);
     const normalizedPreset =
       !showDebugShortPresets &&
       (inferredPreset === "1m" ||
@@ -178,18 +195,14 @@ export function TimeRangePicker({
     setSelectedPreset(normalizedPreset);
   };
 
-  // Initialize or refresh draft only when panel is closed, so auto-refresh won't
-  // overwrite user input while editing custom range.
-  useEffect(() => {
-    if (open) return;
-    syncDraftFromValue();
-  }, [value]);
+  const syncDraftFromValue = () => syncDraftFromRange(value);
 
-  // When opening picker, take a snapshot from latest external value once.
+  // Keep draft synced with external value except while actively editing custom
+  // range in the opened panel.
   useEffect(() => {
-    if (!open) return;
+    if (open && selectedPreset === "custom") return;
     syncDraftFromValue();
-  }, [open]);
+  }, [value, open, selectedPreset]);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 639px)");
@@ -201,7 +214,7 @@ export function TimeRangePicker({
 
   const desktopDisplayText = useMemo(() => {
     if (selectedPreset === "custom") {
-      return `${formatDateTimeDisplayByLocale(value.start, localeCode)} - ${formatDateTimeDisplayByLocale(value.end, localeCode)}`;
+      return formatCustomRangeDisplay(value.start, value.end);
     }
     const match = quickPresets.find((p) => p.value === selectedPreset);
     if (!match) return t("defaultRange");
@@ -220,8 +233,9 @@ export function TimeRangePicker({
   }, [selectedPreset, quickPresets, t]);
 
   const applyQuickPreset = (preset: Exclude<PresetType, "custom">) => {
-    setSelectedPreset(preset);
     const next = getPresetTimeRange(preset);
+    syncDraftFromRange(next);
+    setSelectedPreset(preset);
     onChange(next, preset);
     setOpen(false);
   };
@@ -255,7 +269,10 @@ export function TimeRangePicker({
         <Button
           variant="ghost"
           className={cn(
-            "h-9 w-[138px] sm:w-[152px] justify-between rounded-xl border-0 bg-secondary/45 px-3 text-sm shadow-none hover:bg-secondary/65",
+            "h-9 w-[138px] justify-between rounded-xl border-0 bg-secondary/45 px-3 text-sm shadow-none hover:bg-secondary/65",
+            selectedPreset === "custom"
+              ? "sm:w-[220px] lg:w-[250px] xl:w-[280px]"
+              : "sm:w-[152px]",
             className,
           )}>
           <span className="flex min-w-0 items-center gap-2">
@@ -268,7 +285,7 @@ export function TimeRangePicker({
       </PopoverTrigger>
 
       <PopoverContent
-        className="w-[calc(100vw-2rem)] sm:w-[352px] max-w-[calc(100vw-1rem)] rounded-xl border border-border/60 bg-card p-4 shadow-xs space-y-4"
+        className="w-[calc(100vw-2rem)] sm:w-[352px] max-w-[calc(100vw-1rem)] rounded-xl border border-border/60 bg-popover text-popover-foreground p-4 shadow-xs space-y-4"
         align={isMobile ? "center" : "end"}
         sideOffset={8}
         collisionPadding={12}>
@@ -319,7 +336,7 @@ export function TimeRangePicker({
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent
-                  className="w-auto overflow-hidden rounded-xl border border-border/60 bg-card p-0 shadow-xs z-[80]"
+                  className="w-auto overflow-hidden rounded-xl border border-border/60 bg-popover text-popover-foreground p-0 shadow-xs z-[90]"
                   align="start"
                   sideOffset={6}
                   collisionPadding={12}>
@@ -366,7 +383,7 @@ export function TimeRangePicker({
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent
-                  className="w-auto overflow-hidden rounded-xl border border-border/60 bg-card p-0 shadow-xs z-[80]"
+                  className="w-auto overflow-hidden rounded-xl border border-border/60 bg-popover text-popover-foreground p-0 shadow-xs z-[90]"
                   align="start"
                   sideOffset={6}
                   collisionPadding={12}>
