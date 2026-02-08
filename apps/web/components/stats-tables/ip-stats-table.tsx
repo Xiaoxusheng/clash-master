@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { CountryFlag } from "@/components/country-flag";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,7 +19,6 @@ import { Favicon } from "@/components/favicon";
 import { 
   PAGE_SIZE_OPTIONS, 
   getIPGradient, 
-  getCountryFlag,
   getPageNumbers,
   type PageSize,
   type IPSortKey,
@@ -229,9 +229,7 @@ export function IPStatsTable({
                       <div className="col-span-2 flex items-center gap-1.5 min-w-0">
                         {ip.geoIP && ip.geoIP.length > 0 ? (
                           <>
-                            <span className="text-sm shrink-0" title={ip.geoIP[1] || ip.geoIP[0]}>
-                              {getCountryFlag(ip.geoIP[0])}
-                            </span>
+                            <CountryFlag country={ip.geoIP[0]} className="h-3.5 w-5" title={ip.geoIP[1] || ip.geoIP[0]} />
                             <span className="text-xs truncate">{ip.geoIP[1] || ip.geoIP[0]}</span>
                           </>
                         ) : (
@@ -298,9 +296,7 @@ export function IPStatsTable({
                         </div>
                         <code className="font-mono text-sm flex-1 truncate">{ip.ip}</code>
                         {ip.geoIP && ip.geoIP.length > 0 && (
-                          <span className="text-sm shrink-0" title={ip.geoIP[1] || ip.geoIP[0]}>
-                            {getCountryFlag(ip.geoIP[0])}
-                          </span>
+                          <CountryFlag country={ip.geoIP[0]} className="h-3.5 w-5" title={ip.geoIP[1] || ip.geoIP[0]} />
                         )}
                         <Button
                           variant="ghost"

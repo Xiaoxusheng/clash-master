@@ -34,6 +34,7 @@ interface NavigationProps {
   activeTab: string;
   onTabChange: (tab: string) => void;
   onBackendChange?: () => void;
+  backendStatus?: "healthy" | "unhealthy" | "unknown";
 }
 
 const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || "0.0.0";
@@ -52,6 +53,7 @@ export function Navigation({
   activeTab,
   onTabChange,
   onBackendChange,
+  backendStatus = "unknown",
 }: NavigationProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -59,10 +61,32 @@ export function Navigation({
   const headerT = useTranslations("header");
   const backendT = useTranslations("backend");
   const aboutT = useTranslations("about");
+  const dashboardT = useTranslations("dashboard");
   const { latestVersion, hasUpdate, isChecking, stars, checkNow } =
     useVersionCheck(APP_VERSION);
   const { canInstall, promptInstall } = usePWAInstall();
   const pwaT = useTranslations("pwa");
+
+  const statusClass =
+    backendStatus === "healthy"
+      ? "bg-emerald-500"
+      : backendStatus === "unhealthy"
+        ? "bg-rose-500"
+        : "bg-amber-500";
+
+  const statusPingClass =
+    backendStatus === "healthy"
+      ? "bg-emerald-400/70"
+      : backendStatus === "unhealthy"
+        ? "bg-rose-400/70"
+        : "bg-amber-400/70";
+
+  const statusText =
+    backendStatus === "healthy"
+      ? dashboardT("backendHealthy")
+      : backendStatus === "unhealthy"
+        ? dashboardT("backendUnavailable")
+        : dashboardT("backendStatusUnknown");
 
   return (
     <>
@@ -80,7 +104,35 @@ export function Navigation({
             />
           </div>
           <div>
-            <h1 className="font-bold text-xl">{headerT("title")}</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="font-bold text-xl">{headerT("title")}</h1>
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span
+                      className="relative inline-flex h-2.5 w-2.5 shrink-0"
+                      aria-label={statusText}
+                      role="status">
+                      <span
+                        className={cn(
+                          "absolute inline-flex h-full w-full rounded-full animate-ping",
+                          statusPingClass,
+                        )}
+                      />
+                      <span
+                        className={cn(
+                          "relative inline-flex h-2.5 w-2.5 rounded-full shadow-[0_0_0_3px_rgba(255,255,255,0.06)]",
+                          statusClass,
+                        )}
+                      />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    <p>{statusText}</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
             <p className="text-xs text-muted-foreground/60">
               {headerT("subtitle")}
             </p>

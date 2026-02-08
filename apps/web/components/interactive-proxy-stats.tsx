@@ -1,15 +1,16 @@
 "use client";
 
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { Loader2, BarChart3, Link2, Waypoints } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, BarChart, Bar, XAxis, YAxis, Cell as BarCell, LabelList } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { CountryFlag, extractCountryCodeFromText, stripLeadingFlagEmoji } from "@/components/country-flag";
 import { formatBytes, formatNumber } from "@/lib/utils";
 import { cn } from "@/lib/utils";
-import { api } from "@/lib/api";
+import { api, type TimeRange } from "@/lib/api";
 import { Favicon } from "@/components/favicon";
 import { DomainStatsTable, IPStatsTable } from "@/components/stats-tables";
 import { COLORS } from "@/lib/stats-utils";
@@ -18,22 +19,28 @@ import type { ProxyStats, DomainStats, IPStats } from "@clashmaster/shared";
 interface InteractiveProxyStatsProps {
   data: ProxyStats[];
   activeBackendId?: number;
+  timeRange?: TimeRange;
+  backendStatus?: "healthy" | "unhealthy" | "unknown";
+}
+
+function normalizeProxyName(name: string): string {
+  return name
+    .trim()
+    .replace(/^\["?/, "")
+    .replace(/"?\]$/, "");
 }
 
 function simplifyProxyName(name: string): string {
   if (!name) return "DIRECT";
-  return name.trim();
+  return stripLeadingFlagEmoji(normalizeProxyName(name));
 }
 
-function getProxyEmoji(name: string): string {
-  if (name.includes("🇺🇸")) return "🇺🇸";
-  if (name.includes("🇯🇵")) return "🇯🇵";
-  if (name.includes("🇸🇬")) return "🇸🇬";
-  if (name.includes("🇭🇰")) return "🇭🇰";
-  if (name.includes("🇹🇼")) return "🇹🇼";
-  if (name.includes("🇰🇷")) return "🇰🇷";
-  if (name === "DIRECT" || name === "Direct") return "🏠";
-  return "🌐";
+function getProxyCountryCode(name: string): string {
+  const cleaned = normalizeProxyName(name);
+  if (cleaned === "DIRECT" || cleaned === "Direct") {
+    return "DIRECT";
+  }
+  return extractCountryCodeFromText(cleaned) ?? "UNKNOWN";
 }
 
 function renderCustomBarLabel(props: any) {
@@ -45,9 +52,15 @@ function renderCustomBarLabel(props: any) {
   );
 }
 
-export function InteractiveProxyStats({ data, activeBackendId }: InteractiveProxyStatsProps) {
+export function InteractiveProxyStats({
+  data,
+  activeBackendId,
+  timeRange,
+  backendStatus,
+}: InteractiveProxyStatsProps) {
   const t = useTranslations("proxies");
   const domainsT = useTranslations("domains");
+  const backendT = useTranslations("dashboard");
   
   const [selectedProxy, setSelectedProxy] = useState<string | null>(null);
   const [proxyDomains, setProxyDomains] = useState<DomainStats[]>([]);
@@ -55,6 +68,9 @@ export function InteractiveProxyStats({ data, activeBackendId }: InteractiveProx
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState("domains");
   const [showDomainBarLabels, setShowDomainBarLabels] = useState(true);
+  const requestIdRef = useRef(0);
+  const prevSelectedProxyRef = useRef<string | null>(null);
+  const prevBackendRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     const media = window.matchMedia("(min-width: 640px)");
@@ -74,7 +90,7 @@ export function InteractiveProxyStats({ data, activeBackendId }: InteractiveProx
       upload: proxy.totalUpload,
       connections: proxy.totalConnections,
       color: COLORS[index % COLORS.length],
-      emoji: getProxyEmoji(proxy.chain),
+      countryCode: getProxyCountryCode(proxy.chain),
       rank: index,
     }));
   }, [data]);
@@ -83,38 +99,65 @@ export function InteractiveProxyStats({ data, activeBackendId }: InteractiveProx
   const topProxies = useMemo(() => [...chartData].sort((a, b) => b.value - a.value).slice(0, 4), [chartData]);
   const maxTotal = useMemo(() => chartData.length ? Math.max(...chartData.map(p => p.value)) : 1, [chartData]);
 
-  const loadProxyDetails = useCallback(async (chain: string) => {
-    setLoading(true);
+  const loadProxyDetails = useCallback(async (chain: string, options?: { background?: boolean }) => {
+    const background = options?.background ?? false;
+    const requestId = ++requestIdRef.current;
+    if (!background) {
+      setLoading(true);
+    }
     try {
       const [domains, ips] = await Promise.all([
-        api.getProxyDomains(chain, activeBackendId),
-        api.getProxyIPs(chain, activeBackendId),
+        api.getProxyDomains(chain, activeBackendId, timeRange),
+        api.getProxyIPs(chain, activeBackendId, timeRange),
       ]);
+      if (requestId !== requestIdRef.current) return;
       setProxyDomains(domains);
       setProxyIPs(ips);
     } catch (err) {
       console.error(`Failed to load details for ${chain}:`, err);
-      setProxyDomains([]);
-      setProxyIPs([]);
+      if (!background) {
+        setProxyDomains([]);
+        setProxyIPs([]);
+      }
     } finally {
-      setLoading(false);
+      if (!background && requestId === requestIdRef.current) {
+        setLoading(false);
+      }
     }
-  }, [activeBackendId]);
+  }, [activeBackendId, timeRange]);
 
   useEffect(() => {
-    if (chartData.length > 0 && !selectedProxy) {
-      const firstProxy = chartData[0].rawName;
-      setSelectedProxy(firstProxy);
-      loadProxyDetails(firstProxy);
+    if (chartData.length === 0) {
+      setSelectedProxy(null);
+      setProxyDomains([]);
+      setProxyIPs([]);
+      return;
     }
-  }, [chartData, selectedProxy, loadProxyDetails]);
+    const exists = !!selectedProxy && chartData.some((item) => item.rawName === selectedProxy);
+    if (!exists) {
+      setSelectedProxy(chartData[0].rawName);
+    }
+  }, [chartData, selectedProxy]);
+
+  useEffect(() => {
+    if (selectedProxy) {
+      const selectedChanged = prevSelectedProxyRef.current !== selectedProxy;
+      const backendChanged = prevBackendRef.current !== activeBackendId;
+      const hasExistingDetails = proxyDomains.length > 0 || proxyIPs.length > 0;
+      if (loading && !selectedChanged && !backendChanged) return;
+      prevSelectedProxyRef.current = selectedProxy;
+      prevBackendRef.current = activeBackendId;
+      loadProxyDetails(selectedProxy, {
+        background: !selectedChanged && !backendChanged && hasExistingDetails,
+      });
+    }
+  }, [selectedProxy, activeBackendId, timeRange, loadProxyDetails, proxyDomains.length, proxyIPs.length, loading]);
 
   const handleProxyClick = useCallback((rawName: string) => {
     if (selectedProxy !== rawName) {
       setSelectedProxy(rawName);
-      loadProxyDetails(rawName);
     }
-  }, [selectedProxy, loadProxyDetails]);
+  }, [selectedProxy]);
 
   const selectedProxyData = useMemo(() => chartData.find(d => d.rawName === selectedProxy), [chartData, selectedProxy]);
 
@@ -133,12 +176,20 @@ export function InteractiveProxyStats({ data, activeBackendId }: InteractiveProx
       }));
   }, [proxyDomains]);
 
+  const isBackendUnavailable = backendStatus === "unhealthy";
+  const emptyHint = isBackendUnavailable
+    ? backendT("backendUnavailableHint")
+    : t("noDataHint");
+
   if (chartData.length === 0) {
     return (
       <Card>
-        <CardContent className="p-12 text-center text-muted-foreground">
-          <Waypoints className="w-8 h-8 mx-auto mb-2 opacity-50" />
-          <p>{t("noData")}</p>
+        <CardContent className="p-5 sm:p-6">
+          <div className="min-h-[220px] rounded-xl border border-dashed border-border/60 bg-card/30 px-4 py-6 flex flex-col items-center justify-center text-center">
+            <Waypoints className="h-8 w-8 text-muted-foreground/70 mb-2" />
+            <p className="text-sm font-medium text-muted-foreground">{t("noData")}</p>
+            <p className="text-xs text-muted-foreground/80 mt-1 max-w-xs">{emptyHint}</p>
+          </div>
         </CardContent>
       </Card>
     );
@@ -156,13 +207,21 @@ export function InteractiveProxyStats({ data, activeBackendId }: InteractiveProx
             <div className="h-[165px] w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={chartData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={2} dataKey="value">
+                  <Pie data={chartData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={2} dataKey="value" isAnimationActive={false}>
                     {chartData.map((entry, index) => (<Cell key={`cell-${index}`} fill={entry.color} />))}
                   </Pie>
                   <RechartsTooltip content={({ active, payload }) => {
                     if (active && payload && payload.length) {
                       const item = payload[0].payload;
-                      return (<div className="bg-background border border-border p-3 rounded-lg shadow-lg"><p className="font-medium text-sm mb-1">{item.emoji} {item.name}</p><p className="text-xs text-muted-foreground">{formatBytes(item.value)}</p></div>);
+                      return (
+                        <div className="bg-background border border-border p-3 rounded-lg shadow-lg">
+                          <div className="mb-1 inline-flex items-center gap-1.5">
+                            <CountryFlag country={item.countryCode} className="h-3.5 w-5" />
+                            <p className="font-medium text-sm">{item.name}</p>
+                          </div>
+                          <p className="text-xs text-muted-foreground">{formatBytes(item.value)}</p>
+                        </div>
+                      );
                     }
                     return null;
                   }} />
@@ -175,7 +234,15 @@ export function InteractiveProxyStats({ data, activeBackendId }: InteractiveProx
                 <div className="mt-1 space-y-1.5">
                   {topProxies.map((item, idx) => {
                     const rankBadgeClass = idx === 0 ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" : idx === 1 ? "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300" : idx === 2 ? "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300" : "bg-muted text-muted-foreground";
-                    return (<div key={item.rawName} title={item.name} className="flex items-center gap-1.5 min-w-0"><span className={cn("w-5 h-5 rounded-md text-[10px] font-bold flex items-center justify-center shrink-0", rankBadgeClass)}>{idx + 1}</span><span className="px-1.5 py-0.5 rounded-md text-[10px] font-medium text-white/90 truncate min-w-0" style={{ backgroundColor: item.color }}>{item.emoji} {item.name}</span></div>);
+                    return (
+                      <div key={item.rawName} title={item.name} className="flex items-center gap-1.5 min-w-0">
+                        <span className={cn("w-5 h-5 rounded-md text-[10px] font-bold flex items-center justify-center shrink-0", rankBadgeClass)}>{idx + 1}</span>
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium text-white/90 truncate min-w-0" style={{ backgroundColor: item.color }}>
+                          <CountryFlag country={item.countryCode} className="h-3 w-4" />
+                          <span className="truncate min-w-0">{item.name}</span>
+                        </span>
+                      </div>
+                    );
                   })}
                 </div>
               </div>
@@ -198,14 +265,14 @@ export function InteractiveProxyStats({ data, activeBackendId }: InteractiveProx
                     <button key={item.rawName} onClick={() => handleProxyClick(item.rawName)} className={cn("w-full p-2.5 rounded-xl border text-left transition-all duration-200", isSelected ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border/50 bg-card/50 hover:bg-card hover:border-primary/30")}>
                       <div className="flex items-center gap-2 mb-1.5">
                         <span className={cn("w-5 h-5 rounded-md text-[10px] font-bold flex items-center justify-center shrink-0", badgeColor)}>{item.rank + 1}</span>
-                        <span className="text-sm shrink-0">{item.emoji}</span>
+                        <CountryFlag country={item.countryCode} className="h-3.5 w-5" />
                         <span className="flex-1 text-sm font-medium truncate" title={item.name}>{item.name}</span>
                         <span className="text-sm font-bold tabular-nums shrink-0">{formatBytes(item.value)}</span>
                       </div>
                       <div className="pl-7 space-y-1">
                         <div className="h-1.5 rounded-full bg-muted overflow-hidden flex">
-                          <div className="h-full bg-blue-500 dark:bg-blue-400" style={{ width: `${(item.download / item.value) * barPercent}%` }} />
-                          <div className="h-full bg-purple-500 dark:bg-purple-400" style={{ width: `${(item.upload / item.value) * barPercent}%` }} />
+                          <div className="h-full bg-blue-500 dark:bg-blue-400" style={{ width: `${item.value > 0 ? (item.download / item.value) * barPercent : 0}%` }} />
+                          <div className="h-full bg-purple-500 dark:bg-purple-400" style={{ width: `${item.value > 0 ? (item.upload / item.value) * barPercent : 0}%` }} />
                         </div>
                         <div className="flex flex-wrap items-center justify-between gap-1 text-xs text-muted-foreground">
                           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
@@ -229,12 +296,22 @@ export function InteractiveProxyStats({ data, activeBackendId }: InteractiveProx
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2"><BarChart3 className="h-4 w-4" />{domainsT("title")}</CardTitle>
-              {selectedProxyData && (<span className="text-xs text-muted-foreground">{selectedProxyData.emoji} {selectedProxyData.name}</span>)}
+              {selectedProxyData && (
+                <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <CountryFlag country={selectedProxyData.countryCode} className="h-3.5 w-5" />
+                  <span>{selectedProxyData.name}</span>
+                </span>
+              )}
             </div>
           </CardHeader>
           <CardContent className="pt-0">
             {loading ? (<div className="h-[280px] flex items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
-            ) : domainChartData.length === 0 ? (<div className="h-[280px] flex items-center justify-center text-muted-foreground text-sm">{domainsT("noData")}</div>
+            ) : domainChartData.length === 0 ? (
+              <div className="h-[280px] rounded-xl border border-dashed border-border/60 bg-card/30 px-4 py-5 flex flex-col items-center justify-center text-center">
+                <BarChart3 className="h-5 w-5 text-muted-foreground/70 mb-2" />
+                <p className="text-sm font-medium text-muted-foreground">{domainsT("noData")}</p>
+                <p className="text-xs text-muted-foreground/80 mt-1 max-w-xs">{emptyHint}</p>
+              </div>
             ) : (
               <div className="h-[280px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
@@ -248,7 +325,7 @@ export function InteractiveProxyStats({ data, activeBackendId }: InteractiveProx
                       }
                       return null;
                     }} cursor={{ fill: "rgba(128, 128, 128, 0.1)" }} />
-                    <Bar dataKey="total" radius={[0, 4, 4, 0]} maxBarSize={24}>
+                    <Bar dataKey="total" radius={[0, 4, 4, 0]} maxBarSize={24} isAnimationActive={false}>
                       {domainChartData.map((entry, index) => (<BarCell key={`cell-${index}`} fill={entry.color} />))}
                       {showDomainBarLabels && (<LabelList dataKey="total" position="right" content={renderCustomBarLabel} />)}
                     </Bar>

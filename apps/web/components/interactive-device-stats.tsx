@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { Loader2, BarChart3, Link2, Smartphone, Monitor, Tablet, HelpCircle } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, BarChart, Bar, XAxis, YAxis, Cell as BarCell, LabelList } from "recharts";
@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatBytes, formatNumber } from "@/lib/utils";
 import { cn } from "@/lib/utils";
-import { api } from "@/lib/api";
+import { api, type TimeRange } from "@/lib/api";
 import { Favicon } from "@/components/favicon";
 import { DomainStatsTable, IPStatsTable } from "@/components/stats-tables";
 import { COLORS } from "@/lib/stats-utils";
@@ -18,6 +18,8 @@ import type { DeviceStats, DomainStats, IPStats } from "@clashmaster/shared";
 interface InteractiveDeviceStatsProps {
   data: DeviceStats[];
   activeBackendId?: number;
+  timeRange?: TimeRange;
+  backendStatus?: "healthy" | "unhealthy" | "unknown";
 }
 
 
@@ -31,9 +33,15 @@ function renderCustomBarLabel(props: any) {
   );
 }
 
-export function InteractiveDeviceStats({ data, activeBackendId }: InteractiveDeviceStatsProps) {
+export function InteractiveDeviceStats({
+  data,
+  activeBackendId,
+  timeRange,
+  backendStatus,
+}: InteractiveDeviceStatsProps) {
   const t = useTranslations("devices");
   const domainsT = useTranslations("domains");
+  const backendT = useTranslations("dashboard");
   
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
   const [deviceDomains, setDeviceDomains] = useState<DomainStats[]>([]);
@@ -41,6 +49,9 @@ export function InteractiveDeviceStats({ data, activeBackendId }: InteractiveDev
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState("domains");
   const [showDomainBarLabels, setShowDomainBarLabels] = useState(true);
+  const requestIdRef = useRef(0);
+  const prevSelectedDeviceRef = useRef<string | null>(null);
+  const prevBackendRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     const media = window.matchMedia("(min-width: 640px)");
@@ -68,38 +79,65 @@ export function InteractiveDeviceStats({ data, activeBackendId }: InteractiveDev
   const topDevices = useMemo(() => [...chartData].sort((a, b) => b.value - a.value).slice(0, 4), [chartData]);
   const maxTotal = useMemo(() => chartData.length ? Math.max(...chartData.map(d => d.value)) : 1, [chartData]);
 
-  const loadDeviceDetails = useCallback(async (sourceIP: string) => {
-    setLoading(true);
+  const loadDeviceDetails = useCallback(async (sourceIP: string, options?: { background?: boolean }) => {
+    const background = options?.background ?? false;
+    const requestId = ++requestIdRef.current;
+    if (!background) {
+      setLoading(true);
+    }
     try {
       const [domains, ips] = await Promise.all([
-        api.getDeviceDomains(sourceIP, activeBackendId),
-        api.getDeviceIPs(sourceIP, activeBackendId),
+        api.getDeviceDomains(sourceIP, activeBackendId, timeRange),
+        api.getDeviceIPs(sourceIP, activeBackendId, timeRange),
       ]);
+      if (requestId !== requestIdRef.current) return;
       setDeviceDomains(domains);
       setDeviceIPs(ips);
     } catch (err) {
       console.error(`Failed to load details for ${sourceIP}:`, err);
-      setDeviceDomains([]);
-      setDeviceIPs([]);
+      if (!background) {
+        setDeviceDomains([]);
+        setDeviceIPs([]);
+      }
     } finally {
-      setLoading(false);
+      if (!background && requestId === requestIdRef.current) {
+        setLoading(false);
+      }
     }
-  }, [activeBackendId]);
+  }, [activeBackendId, timeRange]);
 
   useEffect(() => {
-    if (chartData.length > 0 && !selectedDevice) {
-      const firstDevice = chartData[0].rawName;
-      setSelectedDevice(firstDevice);
-      loadDeviceDetails(firstDevice);
+    if (chartData.length === 0) {
+      setSelectedDevice(null);
+      setDeviceDomains([]);
+      setDeviceIPs([]);
+      return;
     }
-  }, [chartData, selectedDevice, loadDeviceDetails]);
+    const exists = !!selectedDevice && chartData.some((item) => item.rawName === selectedDevice);
+    if (!exists) {
+      setSelectedDevice(chartData[0].rawName);
+    }
+  }, [chartData, selectedDevice]);
+
+  useEffect(() => {
+    if (selectedDevice) {
+      const selectedChanged = prevSelectedDeviceRef.current !== selectedDevice;
+      const backendChanged = prevBackendRef.current !== activeBackendId;
+      const hasExistingDetails = deviceDomains.length > 0 || deviceIPs.length > 0;
+      if (loading && !selectedChanged && !backendChanged) return;
+      prevSelectedDeviceRef.current = selectedDevice;
+      prevBackendRef.current = activeBackendId;
+      loadDeviceDetails(selectedDevice, {
+        background: !selectedChanged && !backendChanged && hasExistingDetails,
+      });
+    }
+  }, [selectedDevice, activeBackendId, timeRange, loadDeviceDetails, deviceDomains.length, deviceIPs.length, loading]);
 
   const handleDeviceClick = useCallback((rawName: string) => {
     if (selectedDevice !== rawName) {
       setSelectedDevice(rawName);
-      loadDeviceDetails(rawName);
     }
-  }, [selectedDevice, loadDeviceDetails]);
+  }, [selectedDevice]);
 
   const selectedDeviceData = useMemo(() => chartData.find(d => d.rawName === selectedDevice), [chartData, selectedDevice]);
 
@@ -118,12 +156,20 @@ export function InteractiveDeviceStats({ data, activeBackendId }: InteractiveDev
       }));
   }, [deviceDomains]);
 
+  const isBackendUnavailable = backendStatus === "unhealthy";
+  const emptyHint = isBackendUnavailable
+    ? backendT("backendUnavailableHint")
+    : t("noDataHint");
+
   if (chartData.length === 0) {
     return (
       <Card>
-        <CardContent className="p-12 text-center text-muted-foreground">
-          <Smartphone className="w-8 h-8 mx-auto mb-2 opacity-50" />
-          <p>{t("noData")}</p>
+        <CardContent className="p-5 sm:p-6">
+          <div className="min-h-[220px] rounded-xl border border-dashed border-border/60 bg-card/30 px-4 py-6 flex flex-col items-center justify-center text-center">
+            <Smartphone className="h-8 w-8 text-muted-foreground/70 mb-2" />
+            <p className="text-sm font-medium text-muted-foreground">{t("noData")}</p>
+            <p className="text-xs text-muted-foreground/80 mt-1 max-w-xs">{emptyHint}</p>
+          </div>
         </CardContent>
       </Card>
     );
@@ -141,7 +187,7 @@ export function InteractiveDeviceStats({ data, activeBackendId }: InteractiveDev
             <div className="h-[165px] w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={chartData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={2} dataKey="value">
+                  <Pie data={chartData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={2} dataKey="value" isAnimationActive={false}>
                     {chartData.map((entry, index) => (<Cell key={`cell-${index}`} fill={entry.color} />))}
                   </Pie>
                   <RechartsTooltip content={({ active, payload }) => {
@@ -197,8 +243,8 @@ export function InteractiveDeviceStats({ data, activeBackendId }: InteractiveDev
                       </div>
                       <div className="pl-7 space-y-1">
                         <div className="h-1.5 rounded-full bg-muted overflow-hidden flex">
-                          <div className="h-full bg-blue-500 dark:bg-blue-400" style={{ width: `${(item.download / item.value) * barPercent}%` }} />
-                          <div className="h-full bg-purple-500 dark:bg-purple-400" style={{ width: `${(item.upload / item.value) * barPercent}%` }} />
+                          <div className="h-full bg-blue-500 dark:bg-blue-400" style={{ width: `${item.value > 0 ? (item.download / item.value) * barPercent : 0}%` }} />
+                          <div className="h-full bg-purple-500 dark:bg-purple-400" style={{ width: `${item.value > 0 ? (item.upload / item.value) * barPercent : 0}%` }} />
                         </div>
                         <div className="flex flex-wrap items-center justify-between gap-1 text-xs text-muted-foreground">
                           <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
@@ -227,7 +273,12 @@ export function InteractiveDeviceStats({ data, activeBackendId }: InteractiveDev
           </CardHeader>
           <CardContent className="pt-0">
             {loading ? (<div className="h-[280px] flex items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
-            ) : domainChartData.length === 0 ? (<div className="h-[280px] flex items-center justify-center text-muted-foreground text-sm">{domainsT("noData")}</div>
+            ) : domainChartData.length === 0 ? (
+              <div className="h-[280px] rounded-xl border border-dashed border-border/60 bg-card/30 px-4 py-5 flex flex-col items-center justify-center text-center">
+                <BarChart3 className="h-5 w-5 text-muted-foreground/70 mb-2" />
+                <p className="text-sm font-medium text-muted-foreground">{domainsT("noData")}</p>
+                <p className="text-xs text-muted-foreground/80 mt-1 max-w-xs">{emptyHint}</p>
+              </div>
             ) : (
               <div className="h-[280px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
@@ -241,7 +292,7 @@ export function InteractiveDeviceStats({ data, activeBackendId }: InteractiveDev
                       }
                       return null;
                     }} cursor={{ fill: "rgba(128, 128, 128, 0.1)" }} />
-                    <Bar dataKey="total" radius={[0, 4, 4, 0]} maxBarSize={24}>
+                    <Bar dataKey="total" radius={[0, 4, 4, 0]} maxBarSize={24} isAnimationActive={false}>
                       {domainChartData.map((entry, index) => (<BarCell key={`cell-${index}`} fill={entry.color} />))}
                       {showDomainBarLabels && (<LabelList dataKey="total" position="right" content={renderCustomBarLabel} />)}
                     </Bar>
