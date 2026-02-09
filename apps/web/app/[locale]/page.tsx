@@ -305,6 +305,7 @@ export default function DashboardPage() {
   const [timePreset, setTimePreset] = useState<TimePreset>("24h");
   const [isManualRefreshing, setIsManualRefreshing] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [autoRefreshTick, setAutoRefreshTick] = useState(0);
   const [showBackendDialog, setShowBackendDialog] = useState(false);
   const [isFirstTime, setIsFirstTime] = useState(false);
   const [showAboutDialog, setShowAboutDialog] = useState(false);
@@ -443,6 +444,7 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!autoRefresh || !isRollingTimePreset(timePreset)) return;
     const interval = setInterval(() => {
+      setAutoRefreshTick((tick) => tick + 1);
       setTimeRange(getPresetTimeRange(timePreset));
       queryClient.removeQueries({ queryKey: ["stats"], type: "inactive" });
     }, 5000);
@@ -453,6 +455,7 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!autoRefresh || isRollingTimePreset(timePreset)) return;
     const interval = setInterval(() => {
+      setAutoRefreshTick((tick) => tick + 1);
       queryClient.invalidateQueries({ queryKey: ["stats"] });
     }, 5000);
     return () => clearInterval(interval);
@@ -529,7 +532,7 @@ export default function DashboardPage() {
       />
 
       <main className="flex-1 min-w-0 lg:ml-0">
-        <header className="sticky top-0 z-40 lg:static border-b border-border/40 bg-background/80 backdrop-blur-md">
+        <header className="sticky top-0 z-40 border-b border-border/40 bg-background/80 backdrop-blur-md">
           <div className="flex items-center justify-between h-14 px-4 lg:px-6">
             <div className="flex items-center gap-3">
               {/* Mobile: Logo, Desktop: Page Title */}
@@ -647,7 +650,17 @@ export default function DashboardPage() {
                             ? "text-emerald-600 hover:bg-emerald-500/10"
                             : "text-muted-foreground hover:bg-muted",
                         )}>
-                        <RefreshCw className={cn("w-4 h-4", autoRefresh && "text-emerald-500")} />
+                        <RefreshCw
+                          className={cn("w-4 h-4", autoRefresh && "text-emerald-500")}
+                          style={
+                            autoRefresh
+                              ? {
+                                  transform: `rotate(${autoRefreshTick * 360}deg)`,
+                                  transition: "transform 650ms linear",
+                                }
+                              : undefined
+                          }
+                        />
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent side="bottom">
@@ -822,17 +835,19 @@ export default function DashboardPage() {
                 </DropdownMenu>
               </div>
 
-              {/* Refresh Button - Both Desktop & Mobile */}
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => refreshNow(true)}
-                disabled={isLoading}
-                className="h-9 w-9">
-                <RefreshCw
-                  className={cn("w-4 h-4", isLoading && "animate-spin")}
-                />
-              </Button>
+              {/* Refresh Button - show when auto refresh is off or backend is unhealthy */}
+              {(!autoRefresh || backendStatus === "unhealthy") && (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => refreshNow(true)}
+                  disabled={isLoading}
+                  className="h-9 w-9">
+                  <RefreshCw
+                    className={cn("w-4 h-4", isLoading && "animate-spin")}
+                  />
+                </Button>
+              )}
             </div>
           </div>
         </header>
