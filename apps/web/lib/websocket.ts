@@ -81,17 +81,48 @@ function normalizeWsUrl(rawUrl: string, runtime?: RuntimeConfig): string {
 function getWsUrlCandidates(): string[] {
   const runtime = getRuntimeConfig();
   const wsPort = runtime?.WS_PORT || process.env.NEXT_PUBLIC_WS_PORT || '3002';
-  if (runtime?.WS_URL) return [normalizeWsUrl(runtime.WS_URL, runtime)];
-  if (process.env.NEXT_PUBLIC_WS_URL) return [normalizeWsUrl(process.env.NEXT_PUBLIC_WS_URL, runtime)];
+
+  const configuredUrls = [
+    runtime?.WS_URL,
+    process.env.NEXT_PUBLIC_WS_URL,
+  ]
+    .map((value) => value?.trim())
+    .filter((value): value is string => !!value)
+    .map((value) => normalizeWsUrl(value, runtime))
+    .filter(Boolean);
+
+  const uniqueCandidates: string[] = [];
+  const pushCandidate = (url: string) => {
+    if (!url || uniqueCandidates.includes(url)) return;
+    uniqueCandidates.push(url);
+  };
+
+  for (const url of configuredUrls) {
+    pushCandidate(url);
+  }
+
   if (typeof window !== 'undefined') {
     const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const hostForPort = runtime?.WS_HOST || window.location.hostname;
     const directUrl = `${wsProtocol}://${hostForPort}:${wsPort}`;
     const hostForPath = runtime?.WS_HOST || window.location.host;
     const pathUrl = `${wsProtocol}://${hostForPath}/_cm_ws`;
-    return [pathUrl, directUrl];
+
+    // Local development usually has no reverse proxy for /_cm_ws.
+    const preferDirect = process.env.NODE_ENV === 'development';
+    if (preferDirect) {
+      pushCandidate(directUrl);
+      pushCandidate(pathUrl);
+    } else {
+      pushCandidate(pathUrl);
+      pushCandidate(directUrl);
+    }
+
+    return uniqueCandidates;
   }
-  return [`ws://localhost:${wsPort}`];
+
+  pushCandidate(`ws://localhost:${wsPort}`);
+  return uniqueCandidates;
 }
 
 export function useStatsWebSocket(options: UseStatsWebSocketOptions = {}) {

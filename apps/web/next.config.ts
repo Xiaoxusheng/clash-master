@@ -39,6 +39,10 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [
       {
+        source: "/manifest.json",
+        destination: "/manifest.webmanifest",
+      },
+      {
         source: "/api/:path*",
         destination: API_DESTINATION,
       },
