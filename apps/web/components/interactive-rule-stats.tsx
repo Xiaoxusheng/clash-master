@@ -942,7 +942,7 @@ export function InteractiveRuleStats({
       <UnifiedRuleChainFlow
         selectedRule={selectedRule}
         activeBackendId={activeBackendId}
-        timeRange={timeRange}
+        timeRange={stableTimeRange}
         autoRefresh={autoRefresh}
       />
 

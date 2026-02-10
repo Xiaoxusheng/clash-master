@@ -34,6 +34,7 @@ import { cn, formatBytes, formatNumber } from "@/lib/utils";
 import { useTheme } from "next-themes";
 import { api, type TimeRange } from "@/lib/api";
 import { useStatsWebSocket } from "@/lib/websocket";
+import { useStableTimeRange } from "@/lib/hooks/use-stable-time-range";
 import { resolveActiveChains, type ActiveChainInfo } from "@/lib/active-chain";
 import { useTranslations } from "next-intl";
 import type { StatsSummary } from "@clashmaster/shared";
@@ -73,7 +74,7 @@ const OTHER_NODES_OFFSET = 130;
 
 // ---------- Custom Edge ----------
 
-function MergedAnimatedFlowEdge({
+const MergedAnimatedFlowEdge = memo(function MergedAnimatedFlowEdge({
   sourceX,
   sourceY,
   targetX,
@@ -159,11 +160,22 @@ function MergedAnimatedFlowEdge({
       )}
     </g>
   );
-}
+}, (prev, next) => {
+  // Only re-render when position or visual state changes
+  if (prev.sourceX !== next.sourceX || prev.sourceY !== next.sourceY) return false;
+  if (prev.targetX !== next.targetX || prev.targetY !== next.targetY) return false;
+  const pd = prev.data as Record<string, unknown> | undefined;
+  const nd = next.data as Record<string, unknown> | undefined;
+  if (pd?.isToProxy !== nd?.isToProxy) return false;
+  if (pd?.dimmed !== nd?.dimmed) return false;
+  if (pd?.showAll !== nd?.showAll) return false;
+  if (pd?._zeroTraffic !== nd?._zeroTraffic) return false;
+  return true;
+});
 
 // ---------- Custom Node ----------
 
-function MergedChainNodeComponent({
+const MergedChainNodeComponent = memo(function MergedChainNodeComponent({
   data,
 }: {
   data: MergedChainNode & { dimmed?: boolean };
@@ -277,7 +289,19 @@ function MergedChainNodeComponent({
       </div>
     </div>
   );
-}
+}, (prev, next) => {
+  const pd = prev.data;
+  const nd = next.data;
+  return (
+    pd.name === nd.name &&
+    pd.nodeType === nd.nodeType &&
+    pd.totalUpload === nd.totalUpload &&
+    pd.totalDownload === nd.totalDownload &&
+    pd.totalConnections === nd.totalConnections &&
+    pd._zeroTraffic === nd._zeroTraffic &&
+    pd.dimmed === nd.dimmed
+  );
+});
 
 // ---------- Registered types (defined outside component to avoid re-creation) ----------
 
@@ -778,6 +802,8 @@ function UnifiedRuleChainFlowInner({
   autoRefresh = true,
 }: UnifiedRuleChainFlowProps) {
   const t = useTranslations("rules");
+  // Round timeRange to the minute so WS/HTTP only re-fires on minute boundaries
+  const stableRange = useStableTimeRange(timeRange, { roundToMinute: true });
   const [data, setData] = useState<AllChainFlowData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -791,7 +817,14 @@ function UnifiedRuleChainFlowInner({
   const prevBackendRef = useRef<number | undefined>(undefined);
   const flowContainerRef = useRef<HTMLDivElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const commitChainFlowData = useCallback((next: AllChainFlowData) => {
+  // Throttle data commits to avoid flooding ReactFlow with updates every ~1s.
+  // The first commit is immediate (initial load), subsequent ones are spaced ≥5s apart.
+  const COMMIT_THROTTLE_MS = 5000;
+  const lastCommitTimeRef = useRef(0);
+  const pendingDataRef = useRef<AllChainFlowData | null>(null);
+  const throttleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const doCommit = useCallback((next: AllChainFlowData) => {
     const normalized = normalizeChainFlowData(next);
     setData((prev) => {
       if (prev && areChainFlowDataEqual(prev, normalized)) {
@@ -805,10 +838,43 @@ function UnifiedRuleChainFlowInner({
     setLoading(false);
   }, [activeBackendId]);
 
+  const commitChainFlowData = useCallback((next: AllChainFlowData) => {
+    const now = Date.now();
+    const elapsed = now - lastCommitTimeRef.current;
+
+    if (elapsed >= COMMIT_THROTTLE_MS) {
+      // Enough time passed — commit immediately
+      lastCommitTimeRef.current = now;
+      doCommit(next);
+    } else {
+      // Store latest data; commit when throttle window expires
+      pendingDataRef.current = next;
+      if (!throttleTimerRef.current) {
+        throttleTimerRef.current = setTimeout(() => {
+          throttleTimerRef.current = null;
+          if (pendingDataRef.current) {
+            lastCommitTimeRef.current = Date.now();
+            doCommit(pendingDataRef.current);
+            pendingDataRef.current = null;
+          }
+        }, COMMIT_THROTTLE_MS - elapsed);
+      }
+    }
+  }, [doCommit]);
+
+  // Clean up throttle timer on unmount
+  useEffect(() => {
+    return () => {
+      if (throttleTimerRef.current) {
+        clearTimeout(throttleTimerRef.current);
+      }
+    };
+  }, []);
+
   const wsEnabled = autoRefresh && !!activeBackendId;
   const { status: wsStatus } = useStatsWebSocket({
     backendId: activeBackendId,
-    range: timeRange,
+    range: stableRange,
     includeRuleChainFlow: wsEnabled,
     enabled: wsEnabled,
     onMessage: useCallback((stats: StatsSummary) => {
@@ -892,7 +958,7 @@ function UnifiedRuleChainFlowInner({
 
     async function loadFlows() {
       try {
-        const result = await api.getAllRuleChainFlows(activeBackendId, timeRange);
+        const result = await api.getAllRuleChainFlows(activeBackendId, stableRange);
         if (cancelled || requestId !== requestIdRef.current) return;
         commitChainFlowData(result);
       } catch (err) {
@@ -913,7 +979,7 @@ function UnifiedRuleChainFlowInner({
     return () => {
       cancelled = true;
     };
-  }, [activeBackendId, timeRange, useHttpFallback, commitChainFlowData]);
+  }, [activeBackendId, stableRange, useHttpFallback, commitChainFlowData]);
 
   useEffect(() => {
     if (!wsEnabled) {
