@@ -1,15 +1,47 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { StatsSummary } from '@clashmaster/shared';
+import type { TimeRange } from '@/lib/api';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
 interface WebSocketMessage {
   type: 'stats' | 'ping' | 'pong';
+  backendId?: number;
   data?: StatsSummary;
   timestamp: string;
 }
 
-interface UseWebSocketOptions {
+interface UseStatsWebSocketOptions {
+  backendId?: number;
+  range?: TimeRange;
+  minPushIntervalMs?: number;
+  includeTrend?: boolean;
+  trendMinutes?: number;
+  trendBucketMinutes?: number;
+  includeDeviceDetails?: boolean;
+  deviceSourceIP?: string;
+  deviceDetailLimit?: number;
+  includeProxyDetails?: boolean;
+  proxyChain?: string;
+  proxyDetailLimit?: number;
+  includeRuleDetails?: boolean;
+  ruleName?: string;
+  ruleDetailLimit?: number;
+  includeRuleChainFlow?: boolean;
+  includeDomainsPage?: boolean;
+  domainsPageOffset?: number;
+  domainsPageLimit?: number;
+  domainsPageSortBy?: string;
+  domainsPageSortOrder?: "asc" | "desc";
+  domainsPageSearch?: string;
+  includeIPsPage?: boolean;
+  ipsPageOffset?: number;
+  ipsPageLimit?: number;
+  ipsPageSortBy?: string;
+  ipsPageSortOrder?: "asc" | "desc";
+  ipsPageSearch?: string;
+  trackLastMessage?: boolean;
+  enabled?: boolean;
   onMessage?: (data: StatsSummary) => void;
   onConnect?: () => void;
   onDisconnect?: () => void;
@@ -27,7 +59,74 @@ function getRuntimeConfig(): RuntimeConfig | undefined {
   return (window as any).__RUNTIME_CONFIG__ as RuntimeConfig | undefined;
 }
 
-export function useStatsWebSocket(options: UseWebSocketOptions = {}) {
+function normalizeWsUrl(rawUrl: string, runtime?: RuntimeConfig): string {
+  if (typeof window === 'undefined') return rawUrl;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return trimmed;
+
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+
+  if (trimmed.startsWith('/')) {
+    const host = runtime?.WS_HOST || window.location.host;
+    return `${wsProtocol}://${host}${trimmed}`;
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed.replace(/^http/i, 'ws');
+  }
+
+  return trimmed;
+}
+
+function getWsUrlCandidates(): string[] {
+  const runtime = getRuntimeConfig();
+  const wsPort = runtime?.WS_PORT || process.env.NEXT_PUBLIC_WS_PORT || '3002';
+  if (runtime?.WS_URL) return [normalizeWsUrl(runtime.WS_URL, runtime)];
+  if (process.env.NEXT_PUBLIC_WS_URL) return [normalizeWsUrl(process.env.NEXT_PUBLIC_WS_URL, runtime)];
+  if (typeof window !== 'undefined') {
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const hostForPort = runtime?.WS_HOST || window.location.hostname;
+    const directUrl = `${wsProtocol}://${hostForPort}:${wsPort}`;
+    const hostForPath = runtime?.WS_HOST || window.location.host;
+    const pathUrl = `${wsProtocol}://${hostForPath}/_cm_ws`;
+    return [pathUrl, directUrl];
+  }
+  return [`ws://localhost:${wsPort}`];
+}
+
+export function useStatsWebSocket(options: UseStatsWebSocketOptions = {}) {
+  const {
+    backendId,
+    range,
+    minPushIntervalMs,
+    includeTrend,
+    trendMinutes,
+    trendBucketMinutes,
+    includeDeviceDetails,
+    deviceSourceIP,
+    deviceDetailLimit,
+    includeProxyDetails,
+    proxyChain,
+    proxyDetailLimit,
+    includeRuleDetails,
+    ruleName,
+    ruleDetailLimit,
+    includeRuleChainFlow,
+    includeDomainsPage,
+    domainsPageOffset,
+    domainsPageLimit,
+    domainsPageSortBy,
+    domainsPageSortOrder,
+    domainsPageSearch,
+    includeIPsPage,
+    ipsPageOffset,
+    ipsPageLimit,
+    ipsPageSortBy,
+    ipsPageSortOrder,
+    ipsPageSearch,
+    trackLastMessage = true,
+    enabled = true,
+  } = options;
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
   const [lastMessage, setLastMessage] = useState<StatsSummary | null>(null);
   const [latency, setLatency] = useState<number | null>(null);
@@ -36,37 +135,68 @@ export function useStatsWebSocket(options: UseWebSocketOptions = {}) {
   const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const lastPingTimeRef = useRef<number>(0);
   const reconnectAttemptsRef = useRef<number>(0);
-  const maxReconnectAttempts = 5;
+  const wsUrlIndexRef = useRef<number>(0);
+  const maxReconnectDelayMs = 30000;
+  const onMessageRef = useRef(options.onMessage);
+  const onConnectRef = useRef(options.onConnect);
+  const onDisconnectRef = useRef(options.onDisconnect);
+  const onErrorRef = useRef(options.onError);
+  const trackLastMessageRef = useRef(trackLastMessage);
+  onMessageRef.current = options.onMessage;
+  onConnectRef.current = options.onConnect;
+  onDisconnectRef.current = options.onDisconnect;
+  onErrorRef.current = options.onError;
+  trackLastMessageRef.current = trackLastMessage;
+
+  const cleanup = useCallback(() => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    if (pingIntervalRef.current) {
+      clearInterval(pingIntervalRef.current);
+      pingIntervalRef.current = null;
+    }
+    if (wsRef.current) {
+      // Nullify handlers BEFORE closing to prevent stale onclose/onerror
+      // from overwriting status set by a newer connection
+      wsRef.current.onopen = null;
+      wsRef.current.onmessage = null;
+      wsRef.current.onclose = null;
+      wsRef.current.onerror = null;
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+  }, []);
 
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (
+      wsRef.current?.readyState === WebSocket.OPEN ||
+      wsRef.current?.readyState === WebSocket.CONNECTING
+    ) return;
     if (typeof window === 'undefined') return;
 
     setStatus('connecting');
 
-    // Support dynamic WebSocket URL configuration
-    // Priority: runtime WS_URL > runtime WS_PORT > NEXT_PUBLIC_WS_URL > NEXT_PUBLIC_WS_PORT > default localhost
-    const runtime = getRuntimeConfig();
-    const wsPort = runtime?.WS_PORT || process.env.NEXT_PUBLIC_WS_PORT || '3002';
-    const wsUrl = runtime?.WS_URL
-      ? runtime.WS_URL
-      : process.env.NEXT_PUBLIC_WS_URL
-        ? process.env.NEXT_PUBLIC_WS_URL
-        : typeof window !== 'undefined'
-          ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${runtime?.WS_HOST || window.location.hostname}:${wsPort}`
-          : `ws://localhost:${wsPort}`;
-    
+    const wsUrls = getWsUrlCandidates();
+    if (wsUrlIndexRef.current >= wsUrls.length) {
+      wsUrlIndexRef.current = 0;
+    }
+    const wsUrl = wsUrls[wsUrlIndexRef.current]!;
     console.log('[WebSocket] Connecting to:', wsUrl);
 
     try {
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
+      let opened = false;
 
       ws.onopen = () => {
+        opened = true;
         console.log('[WebSocket] Connected successfully');
         setStatus('connected');
         reconnectAttemptsRef.current = 0;
-        options.onConnect?.();
+        wsUrlIndexRef.current = 0;
+        onConnectRef.current?.();
 
         // Start ping interval
         pingIntervalRef.current = setInterval(() => {
@@ -82,8 +212,10 @@ export function useStatsWebSocket(options: UseWebSocketOptions = {}) {
           const message = JSON.parse(event.data) as WebSocketMessage;
 
           if (message.type === 'stats' && message.data) {
-            setLastMessage(message.data);
-            options.onMessage?.(message.data);
+            if (trackLastMessageRef.current) {
+              setLastMessage(message.data);
+            }
+            onMessageRef.current?.(message.data);
           } else if (message.type === 'pong') {
             if (lastPingTimeRef.current > 0) {
               setLatency(Date.now() - lastPingTimeRef.current);
@@ -97,61 +229,136 @@ export function useStatsWebSocket(options: UseWebSocketOptions = {}) {
       ws.onclose = (event) => {
         console.log(`[WebSocket] Disconnected. Code: ${event.code}, Reason: ${event.reason}`);
         setStatus('disconnected');
-        options.onDisconnect?.();
+        onDisconnectRef.current?.();
 
-        // Clear intervals
+        // Clear ping interval
         if (pingIntervalRef.current) {
           clearInterval(pingIntervalRef.current);
           pingIntervalRef.current = null;
         }
 
-        // Auto reconnect with exponential backoff
-        if (reconnectAttemptsRef.current < maxReconnectAttempts) {
-          const delay = Math.min(3000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
-          reconnectAttemptsRef.current++;
-          console.log(`[WebSocket] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current})`);
-          
+        // Try alternate endpoint (e.g. /_cm_ws <-> :3002) before backoff reconnect.
+        if (!opened && wsUrlIndexRef.current < wsUrls.length - 1) {
+          wsUrlIndexRef.current += 1;
           reconnectTimerRef.current = setTimeout(() => {
             connect();
-          }, delay);
-        } else {
-          console.log('[WebSocket] Max reconnection attempts reached, giving up');
-          setStatus('error');
+          }, 200);
+          return;
         }
+
+        // Auto reconnect with exponential backoff.
+        const delay = Math.min(3000 * Math.pow(2, reconnectAttemptsRef.current), maxReconnectDelayMs);
+        reconnectAttemptsRef.current++;
+        console.log(`[WebSocket] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current})`);
+        reconnectTimerRef.current = setTimeout(() => {
+          connect();
+        }, delay);
       };
 
       ws.onerror = (error) => {
         console.error('[WebSocket] Connection error. URL:', wsUrl);
         setStatus('error');
-        options.onError?.(error);
+        onErrorRef.current?.(error);
       };
     } catch (err) {
       console.error('[WebSocket] Failed to create connection:', err);
       setStatus('error');
     }
-  }, [options]);
-
-  const disconnect = useCallback(() => {
-    reconnectAttemptsRef.current = maxReconnectAttempts; // Prevent auto reconnect
-    if (reconnectTimerRef.current) {
-      clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = null;
-    }
-    if (pingIntervalRef.current) {
-      clearInterval(pingIntervalRef.current);
-      pingIntervalRef.current = null;
-    }
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-    setStatus('disconnected');
   }, []);
 
+  // Send subscribe message when backend/time-range changes or WS becomes connected.
   useEffect(() => {
+    if (status !== 'connected') return;
+    if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+    if (backendId === undefined) return;
+
+    console.log('[WebSocket] Subscribing to backend:', backendId);
+    wsRef.current.send(JSON.stringify({
+      type: 'subscribe',
+      backendId,
+      start: range?.start,
+      end: range?.end,
+      minPushIntervalMs,
+      includeTrend,
+      trendMinutes,
+      trendBucketMinutes,
+      includeDeviceDetails,
+      deviceSourceIP,
+      deviceDetailLimit,
+      includeProxyDetails,
+      proxyChain,
+      proxyDetailLimit,
+      includeRuleDetails,
+      ruleName,
+      ruleDetailLimit,
+      includeRuleChainFlow,
+      includeDomainsPage,
+      domainsPageOffset,
+      domainsPageLimit,
+      domainsPageSortBy,
+      domainsPageSortOrder,
+      domainsPageSearch,
+      includeIPsPage,
+      ipsPageOffset,
+      ipsPageLimit,
+      ipsPageSortBy,
+      ipsPageSortOrder,
+      ipsPageSearch,
+      timestamp: new Date().toISOString(),
+    }));
+  }, [
+    backendId,
+    range?.start,
+    range?.end,
+    minPushIntervalMs,
+    includeTrend,
+    trendMinutes,
+    trendBucketMinutes,
+    includeDeviceDetails,
+    deviceSourceIP,
+    deviceDetailLimit,
+    includeProxyDetails,
+    proxyChain,
+    proxyDetailLimit,
+    includeRuleDetails,
+    ruleName,
+    ruleDetailLimit,
+    includeRuleChainFlow,
+    includeDomainsPage,
+    domainsPageOffset,
+    domainsPageLimit,
+    domainsPageSortBy,
+    domainsPageSortOrder,
+    domainsPageSearch,
+    includeIPsPage,
+    ipsPageOffset,
+    ipsPageLimit,
+    ipsPageSortBy,
+    ipsPageSortOrder,
+    ipsPageSearch,
+    status,
+  ]);
+
+  const disconnect = useCallback(() => {
+    reconnectAttemptsRef.current = 0;
+    wsUrlIndexRef.current = 0;
+    cleanup();
+    setStatus('disconnected');
+  }, [cleanup]);
+
+  useEffect(() => {
+    if (!enabled) {
+      disconnect();
+      return;
+    }
+
+    reconnectAttemptsRef.current = 0;
     connect();
-    return () => disconnect();
-  }, [connect, disconnect]);
+
+    return () => {
+      disconnect();
+    };
+  }, [enabled, connect, disconnect]);
 
   return {
     status,

@@ -10,6 +10,25 @@ export function ServiceWorkerRegister() {
   const [waitingWorker, setWaitingWorker] = useState<ServiceWorker | null>(null);
 
   useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+
+    // Do not run SW in development, it interferes with HMR and tunnel debugging.
+    if (process.env.NODE_ENV !== "production") {
+      navigator.serviceWorker
+        .getRegistrations()
+        .then((registrations) => {
+          registrations.forEach((registration) => {
+            registration.unregister().catch(() => {
+              // Best effort cleanup only
+            });
+          });
+        })
+        .catch(() => {
+          // Ignore cleanup failures in dev
+        });
+      return;
+    }
+
     if ("serviceWorker" in navigator) {
       // Register service worker
       navigator.serviceWorker
@@ -34,11 +53,16 @@ export function ServiceWorkerRegister() {
         });
 
       // Listen for messages from service worker
-      navigator.serviceWorker.addEventListener("message", (event) => {
+      const onMessage = (event: MessageEvent) => {
         if (event.data && event.data.type === "SKIP_WAITING") {
           window.location.reload();
         }
-      });
+      };
+      navigator.serviceWorker.addEventListener("message", onMessage);
+
+      return () => {
+        navigator.serviceWorker.removeEventListener("message", onMessage);
+      };
     }
   }, []);
 

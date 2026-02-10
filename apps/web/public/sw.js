@@ -33,30 +33,41 @@ self.addEventListener("activate", (event) => {
 
 // Fetch event - network first strategy
 self.addEventListener("fetch", (event) => {
+  const url = new URL(event.request.url);
+
   // Skip non-GET requests
   if (event.request.method !== "GET") return;
-  
+
+  // Cache only same-origin http(s) requests.
+  if (url.origin !== self.location.origin) return;
+  if (url.protocol !== "http:" && url.protocol !== "https:") return;
+
   // Skip API requests
-  if (event.request.url.includes("/api/")) return;
-  
+  if (url.pathname.startsWith("/api/")) return;
+
+  // Skip dev HMR stream endpoints.
+  if (url.pathname.startsWith("/_next/webpack-hmr")) return;
+
   event.respondWith(
     fetch(event.request)
       .then((response) => {
-        // Clone the response
-        const responseToCache = response.clone();
-        
         // Cache successful GET requests
         if (response.status === 200) {
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseToCache);
-          });
+          const responseToCache = response.clone();
+          event.waitUntil(
+            caches.open(CACHE_NAME)
+              .then((cache) => cache.put(event.request, responseToCache))
+              .catch(() => {
+                // Ignore cache write failures
+              }),
+          );
         }
-        
+
         return response;
       })
       .catch(() => {
         // Fallback to cache if network fails
-        return caches.match(event.request);
+        return caches.match(event.request).then((cached) => cached || Response.error());
       }),
   );
 });

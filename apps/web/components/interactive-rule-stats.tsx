@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef, startTransition } from "react";
 import { Server, ChevronLeft, ChevronRight, Loader2, BarChart3, Link2, Rows3, ArrowUpDown, ArrowDown, ArrowUp, Globe, Waypoints, ChevronDown, ChevronUp } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { api, type ClashRulesResponse, type TimeRange } from "@/lib/api";
 import { useStableTimeRange } from "@/lib/hooks/use-stable-time-range";
 import { keepPreviousByIdentity } from "@/lib/query-placeholder";
+import { useStatsWebSocket } from "@/lib/websocket";
 import {
   getRuleDomainsQueryKey,
   getRuleIPsQueryKey,
@@ -37,13 +38,14 @@ import { ProxyChainBadge } from "@/components/proxy-chain-badge";
 import { DomainExpandedDetails, IPExpandedDetails } from "@/components/stats-tables/expanded-details";
 import { ExpandReveal } from "@/components/ui/expand-reveal";
 import { UnifiedRuleChainFlow } from "@/components/rule-chain-flow";
-import type { RuleStats, DomainStats, IPStats } from "@clashmaster/shared";
+import type { RuleStats, DomainStats, IPStats, StatsSummary } from "@clashmaster/shared";
 
 interface InteractiveRuleStatsProps {
   data?: RuleStats[];
   activeBackendId?: number;
   timeRange?: TimeRange;
   backendStatus?: "healthy" | "unhealthy" | "unknown";
+  autoRefresh?: boolean;
 }
 
 const COLORS = [
@@ -58,6 +60,34 @@ const CHART_COLORS = [
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
 type PageSize = typeof PAGE_SIZE_OPTIONS[number];
+const DETAIL_QUERY_STALE_MS = 30_000;
+const RULE_DETAIL_WS_MERGE_MS = 5_000;
+const RULE_DETAIL_WS_MIN_PUSH_MS = 5_000;
+const EMPTY_DOMAINS: DomainStats[] = [];
+const EMPTY_IPS: IPStats[] = [];
+
+interface RuleChartItem {
+  name: string;
+  rawName: string;
+  value: number;
+  download: number;
+  upload: number;
+  connections: number;
+  finalProxy?: string;
+  color: string;
+  rank: number;
+  hasTraffic: boolean;
+}
+
+interface RuleDomainChartItem {
+  name: string;
+  fullDomain: string;
+  total: number;
+  download: number;
+  upload: number;
+  connections: number;
+  color: string;
+}
 
 // Domain sort keys
 type DomainSortKey = "domain" | "totalDownload" | "totalUpload" | "totalConnections";
@@ -109,12 +139,13 @@ export function InteractiveRuleStats({
   activeBackendId,
   timeRange,
   backendStatus,
+  autoRefresh = true,
 }: InteractiveRuleStatsProps) {
   const t = useTranslations("rules");
   const domainsT = useTranslations("domains");
   const ipsT = useTranslations("ips");
   const backendT = useTranslations("dashboard");
-  const stableTimeRange = useStableTimeRange(timeRange);
+  const stableTimeRange = useStableTimeRange(timeRange, { roundToMinute: true });
   const detailTimeRange = stableTimeRange;
 
   const ruleListQuery = useQuery({
@@ -138,6 +169,12 @@ export function InteractiveRuleStats({
   const [ipSearch, setIpSearch] = useState("");
   const [showDomainBarLabels, setShowDomainBarLabels] = useState(true);
   const [clashRules, setClashRules] = useState<ClashRulesResponse | null>(null);
+  const [wsRuleDomains, setWsRuleDomains] = useState<DomainStats[] | null>(null);
+  const [wsRuleIPs, setWsRuleIPs] = useState<IPStats[] | null>(null);
+  const pendingRuleDomainsRef = useRef<DomainStats[] | null>(null);
+  const pendingRuleIPsRef = useRef<IPStats[] | null>(null);
+  const detailFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastDetailFlushAtRef = useRef(0);
 
   // Sort states
   const [domainSortKey, setDomainSortKey] = useState<DomainSortKey>("totalDownload");
@@ -157,7 +194,8 @@ export function InteractiveRuleStats({
     return () => media.removeEventListener("change", update);
   }, []);
 
-  // Fetch Clash rules to find zero-traffic rules
+  // Fetch Clash rules to find zero-traffic rules.
+  // Ruleset metadata changes infrequently, so load on mount/backend switch only.
   useEffect(() => {
     let cancelled = false;
     async function fetchClashRules() {
@@ -169,14 +207,13 @@ export function InteractiveRuleStats({
       }
     }
     fetchClashRules();
-    const interval = setInterval(fetchClashRules, 30000);
-    return () => { cancelled = true; clearInterval(interval); };
+    return () => { cancelled = true; };
   }, [activeBackendId]);
 
-  const chartData = useMemo(() => {
+  const chartData = useMemo<RuleChartItem[]>(() => {
     if (!rulesData) return [];
     const existingRuleNames = new Set(rulesData.map(r => r.rule));
-    const trafficItems = rulesData.map((rule, index) => ({
+    const trafficItems: RuleChartItem[] = rulesData.map((rule, index) => ({
       name: rule.rule,
       rawName: rule.rule,
       value: rule.totalDownload + rule.totalUpload,
@@ -265,6 +302,106 @@ export function InteractiveRuleStats({
     setExpandedIP(newExpanded);
   };
 
+  const flushPendingRuleDetails = useCallback(() => {
+    detailFlushTimerRef.current = null;
+    const nextDomains = pendingRuleDomainsRef.current;
+    const nextIPs = pendingRuleIPsRef.current;
+    pendingRuleDomainsRef.current = null;
+    pendingRuleIPsRef.current = null;
+    if (nextDomains || nextIPs) {
+      startTransition(() => {
+        if (nextDomains) {
+          setWsRuleDomains(nextDomains);
+        }
+        if (nextIPs) {
+          setWsRuleIPs(nextIPs);
+        }
+      });
+    }
+    lastDetailFlushAtRef.current = Date.now();
+  }, []);
+
+  const enqueueRuleDetailUpdate = useCallback((
+    domains: DomainStats[] | undefined,
+    ips: IPStats[] | undefined,
+  ) => {
+    if (domains) {
+      pendingRuleDomainsRef.current = domains;
+    }
+    if (ips) {
+      pendingRuleIPsRef.current = ips;
+    }
+
+    const now = Date.now();
+    const elapsed = now - lastDetailFlushAtRef.current;
+    if (elapsed >= RULE_DETAIL_WS_MERGE_MS) {
+      flushPendingRuleDetails();
+      return;
+    }
+    if (detailFlushTimerRef.current) {
+      return;
+    }
+    detailFlushTimerRef.current = setTimeout(() => {
+      flushPendingRuleDetails();
+    }, RULE_DETAIL_WS_MERGE_MS - elapsed);
+  }, [flushPendingRuleDetails]);
+
+  const wsDetailEnabled = autoRefresh && !!activeBackendId && !!selectedRule;
+  const { status: wsDetailStatus } = useStatsWebSocket({
+    backendId: activeBackendId,
+    range: detailTimeRange,
+    minPushIntervalMs: RULE_DETAIL_WS_MIN_PUSH_MS,
+    includeRuleDetails: wsDetailEnabled,
+    ruleName: selectedRule ?? undefined,
+    ruleDetailLimit: 5000,
+    trackLastMessage: false,
+    enabled: wsDetailEnabled,
+    onMessage: useCallback((stats: StatsSummary) => {
+      if (!selectedRule) return;
+      if (stats.ruleDetailName !== selectedRule) return;
+      if (stats.ruleDomains || stats.ruleIPs) {
+        enqueueRuleDetailUpdate(stats.ruleDomains, stats.ruleIPs);
+      }
+    }, [enqueueRuleDetailUpdate, selectedRule]),
+  });
+
+  useEffect(() => {
+    setWsRuleDomains(null);
+    setWsRuleIPs(null);
+    pendingRuleDomainsRef.current = null;
+    pendingRuleIPsRef.current = null;
+    lastDetailFlushAtRef.current = 0;
+    if (detailFlushTimerRef.current) {
+      clearTimeout(detailFlushTimerRef.current);
+      detailFlushTimerRef.current = null;
+    }
+  }, [selectedRule, activeBackendId]);
+
+  useEffect(() => {
+    if (wsDetailEnabled) return;
+    pendingRuleDomainsRef.current = null;
+    pendingRuleIPsRef.current = null;
+    lastDetailFlushAtRef.current = 0;
+    if (detailFlushTimerRef.current) {
+      clearTimeout(detailFlushTimerRef.current);
+      detailFlushTimerRef.current = null;
+    }
+  }, [wsDetailEnabled]);
+
+  useEffect(() => {
+    return () => {
+      if (detailFlushTimerRef.current) {
+        clearTimeout(detailFlushTimerRef.current);
+      }
+    };
+  }, []);
+
+  const hasWsRuleDetails =
+    wsDetailEnabled &&
+    wsDetailStatus === "connected" &&
+    wsRuleDomains !== null &&
+    wsRuleIPs !== null;
+
   const expandedDomainProxyQuery = useQuery({
     queryKey: getDomainProxyStatsQueryKey(expandedDomain, activeBackendId, detailTimeRange, {
       rule: selectedRule ?? undefined,
@@ -277,6 +414,7 @@ export function InteractiveRuleStats({
         detailTimeRange,
       ),
     enabled: !!activeBackendId && !!selectedRule && !!expandedDomain,
+    staleTime: DETAIL_QUERY_STALE_MS,
     placeholderData: (previousData, previousQuery) =>
       keepPreviousByIdentity(previousData, previousQuery, {
         domain: expandedDomain ?? "",
@@ -297,6 +435,7 @@ export function InteractiveRuleStats({
         detailTimeRange,
       ),
     enabled: !!activeBackendId && !!selectedRule && !!expandedDomain,
+    staleTime: DETAIL_QUERY_STALE_MS,
     placeholderData: (previousData, previousQuery) =>
       keepPreviousByIdentity(previousData, previousQuery, {
         domain: expandedDomain ?? "",
@@ -317,6 +456,7 @@ export function InteractiveRuleStats({
         detailTimeRange,
       ),
     enabled: !!activeBackendId && !!selectedRule && !!expandedIP,
+    staleTime: DETAIL_QUERY_STALE_MS,
     placeholderData: (previousData, previousQuery) =>
       keepPreviousByIdentity(previousData, previousQuery, {
         ip: expandedIP ?? "",
@@ -337,6 +477,7 @@ export function InteractiveRuleStats({
         detailTimeRange,
       ),
     enabled: !!activeBackendId && !!selectedRule && !!expandedIP,
+    staleTime: DETAIL_QUERY_STALE_MS,
     placeholderData: (previousData, previousQuery) =>
       keepPreviousByIdentity(previousData, previousQuery, {
         ip: expandedIP ?? "",
@@ -353,7 +494,7 @@ export function InteractiveRuleStats({
         activeBackendId,
         detailTimeRange,
       ),
-    enabled: !!activeBackendId && !!selectedRule,
+    enabled: !!activeBackendId && !!selectedRule && !hasWsRuleDetails,
     placeholderData: (previousData, previousQuery) =>
       keepPreviousByIdentity(previousData, previousQuery, {
         rule: selectedRule ?? "",
@@ -369,7 +510,7 @@ export function InteractiveRuleStats({
         activeBackendId,
         detailTimeRange,
       ),
-    enabled: !!activeBackendId && !!selectedRule,
+    enabled: !!activeBackendId && !!selectedRule && !hasWsRuleDetails,
     placeholderData: (previousData, previousQuery) =>
       keepPreviousByIdentity(previousData, previousQuery, {
         rule: selectedRule ?? "",
@@ -377,9 +518,9 @@ export function InteractiveRuleStats({
       }),
   });
 
-  const ruleDomains: DomainStats[] = ruleDomainsQuery.data ?? [];
-  const ruleIPs: IPStats[] = ruleIPsQuery.data ?? [];
-  const loading = !!selectedRule && !ruleDomainsQuery.data && !ruleIPsQuery.data;
+  const ruleDomains: DomainStats[] = hasWsRuleDetails ? wsRuleDomains ?? [] : ruleDomainsQuery.data ?? [];
+  const ruleIPs: IPStats[] = hasWsRuleDetails ? wsRuleIPs ?? [] : ruleIPsQuery.data ?? [];
+  const loading = !!selectedRule && !hasWsRuleDetails && !ruleDomainsQuery.data && !ruleIPsQuery.data;
 
   // Sort icon component
   const DomainSortIcon = ({ column }: { column: DomainSortKey }) => {
@@ -437,8 +578,12 @@ export function InteractiveRuleStats({
     return chartData.find(r => r.rawName === selectedRule);
   }, [chartData, selectedRule]);
 
+  const isDomainsTab = activeTab === "domains";
+  const isIPsTab = activeTab === "ips";
+
   // Filter, sort and paginate domains
   const filteredDomains = useMemo(() => {
+    if (!isDomainsTab) return EMPTY_DOMAINS;
     let result = ruleDomains;
     if (domainSearch) {
       result = ruleDomains.filter(d => 
@@ -455,17 +600,27 @@ export function InteractiveRuleStats({
       }
       return ((aValue as number) - (bValue as number)) * modifier;
     });
-  }, [ruleDomains, domainSearch, domainSortKey, domainSortOrder]);
+  }, [isDomainsTab, ruleDomains, domainSearch, domainSortKey, domainSortOrder]);
 
   const paginatedDomains = useMemo(() => {
+    if (!isDomainsTab) return EMPTY_DOMAINS;
     const start = (domainPage - 1) * domainPageSize;
     return filteredDomains.slice(start, start + domainPageSize);
-  }, [filteredDomains, domainPage, domainPageSize]);
+  }, [isDomainsTab, filteredDomains, domainPage, domainPageSize]);
 
-  const domainTotalPages = Math.ceil(filteredDomains.length / domainPageSize);
+  const domainTotalPages = isDomainsTab
+    ? Math.max(1, Math.ceil(filteredDomains.length / domainPageSize))
+    : 1;
+  const totalFilteredDomainTraffic = useMemo(
+    () => (isDomainsTab
+      ? filteredDomains.reduce((sum, d) => sum + d.totalDownload + d.totalUpload, 0)
+      : 0),
+    [isDomainsTab, filteredDomains],
+  );
 
   // Filter, sort and paginate IPs
   const filteredIPs = useMemo(() => {
+    if (!isIPsTab) return EMPTY_IPS;
     let result = ruleIPs;
     if (ipSearch) {
       result = ruleIPs.filter(ip => 
@@ -483,17 +638,26 @@ export function InteractiveRuleStats({
       }
       return ((aValue as number) - (bValue as number)) * modifier;
     });
-  }, [ruleIPs, ipSearch, ipSortKey, ipSortOrder]);
+  }, [isIPsTab, ruleIPs, ipSearch, ipSortKey, ipSortOrder]);
 
   const paginatedIPs = useMemo(() => {
+    if (!isIPsTab) return EMPTY_IPS;
     const start = (ipPage - 1) * ipPageSize;
     return filteredIPs.slice(start, start + ipPageSize);
-  }, [filteredIPs, ipPage, ipPageSize]);
+  }, [isIPsTab, filteredIPs, ipPage, ipPageSize]);
 
-  const ipTotalPages = Math.ceil(filteredIPs.length / ipPageSize);
+  const ipTotalPages = isIPsTab
+    ? Math.max(1, Math.ceil(filteredIPs.length / ipPageSize))
+    : 1;
+  const totalFilteredIPTraffic = useMemo(
+    () => (isIPsTab
+      ? filteredIPs.reduce((sum, ip) => sum + ip.totalDownload + ip.totalUpload, 0)
+      : 0),
+    [isIPsTab, filteredIPs],
+  );
 
   // Chart data
-  const domainChartData = useMemo(() => {
+  const domainChartData = useMemo<RuleDomainChartItem[]>(() => {
     if (!ruleDomains?.length) return [];
     return ruleDomains
       .slice(0, 10)
@@ -870,7 +1034,8 @@ export function InteractiveRuleStats({
       <UnifiedRuleChainFlow
         selectedRule={selectedRule}
         activeBackendId={activeBackendId}
-        timeRange={timeRange}
+        timeRange={stableTimeRange}
+        autoRefresh={autoRefresh}
       />
 
       {/* Bottom Section: Domain List & IP Addresses with pagination */}
@@ -999,12 +1164,12 @@ export function InteractiveRuleStats({
                     {/* Domain List */}
                     <div className="divide-y divide-border/30">
                       {(() => {
-                        const totalDomainTraffic = filteredDomains.reduce(
-                          (sum, d) => sum + d.totalDownload + d.totalUpload, 0
-                        );
                         return paginatedDomains.map((domain, index) => {
                           const domainTraffic = domain.totalDownload + domain.totalUpload;
-                          const percent = totalDomainTraffic > 0 ? (domainTraffic / totalDomainTraffic) * 100 : 0;
+                          const percent =
+                            totalFilteredDomainTraffic > 0
+                              ? (domainTraffic / totalFilteredDomainTraffic) * 100
+                              : 0;
                           const isExpanded = expandedDomain === domain.domain;
                           
                           return (
@@ -1351,12 +1516,12 @@ export function InteractiveRuleStats({
                     {/* IP List */}
                     <div className="divide-y divide-border/30">
                       {(() => {
-                        const totalIPTraffic = filteredIPs.reduce(
-                          (sum, ip) => sum + ip.totalDownload + ip.totalUpload, 0
-                        );
                         return paginatedIPs.map((ip, index) => {
                           const ipTraffic = ip.totalDownload + ip.totalUpload;
-                          const percent = totalIPTraffic > 0 ? (ipTraffic / totalIPTraffic) * 100 : 0;
+                          const percent =
+                            totalFilteredIPTraffic > 0
+                              ? (ipTraffic / totalFilteredIPTraffic) * 100
+                              : 0;
                           const isExpanded = expandedIP === ip.ip;
                           const ipColor = getIPColor(ip.ip);
                           

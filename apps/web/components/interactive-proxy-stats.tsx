@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { api, type TimeRange } from "@/lib/api";
 import { useStableTimeRange } from "@/lib/hooks/use-stable-time-range";
 import { keepPreviousByIdentity } from "@/lib/query-placeholder";
+import { useStatsWebSocket } from "@/lib/websocket";
 import {
   getProxiesQueryKey,
   getProxyDomainsQueryKey,
@@ -22,13 +23,14 @@ import {
 import { Favicon } from "@/components/favicon";
 import { DomainStatsTable, IPStatsTable } from "@/components/stats-tables";
 import { COLORS } from "@/lib/stats-utils";
-import type { ProxyStats } from "@clashmaster/shared";
+import type { DomainStats, IPStats, ProxyStats, StatsSummary } from "@clashmaster/shared";
 
 interface InteractiveProxyStatsProps {
   data?: ProxyStats[];
   activeBackendId?: number;
   timeRange?: TimeRange;
   backendStatus?: "healthy" | "unhealthy" | "unknown";
+  autoRefresh?: boolean;
 }
 
 function normalizeProxyName(name: string): string {
@@ -70,6 +72,7 @@ export function InteractiveProxyStats({
   activeBackendId,
   timeRange,
   backendStatus,
+  autoRefresh = true,
 }: InteractiveProxyStatsProps) {
   const t = useTranslations("proxies");
   const domainsT = useTranslations("domains");
@@ -89,6 +92,8 @@ export function InteractiveProxyStats({
   const [selectedProxy, setSelectedProxy] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("domains");
   const [showDomainBarLabels, setShowDomainBarLabels] = useState(true);
+  const [wsProxyDomains, setWsProxyDomains] = useState<DomainStats[] | null>(null);
+  const [wsProxyIPs, setWsProxyIPs] = useState<IPStats[] | null>(null);
 
   useEffect(() => {
     const media = window.matchMedia("(min-width: 640px)");
@@ -128,6 +133,37 @@ export function InteractiveProxyStats({
     }
   }, [chartData, selectedProxy]);
 
+  const wsDetailEnabled = autoRefresh && !!activeBackendId && !!selectedProxy;
+  const { status: wsDetailStatus } = useStatsWebSocket({
+    backendId: activeBackendId,
+    range: detailTimeRange,
+    includeProxyDetails: wsDetailEnabled,
+    proxyChain: selectedProxy ?? undefined,
+    proxyDetailLimit: 5000,
+    enabled: wsDetailEnabled,
+    onMessage: useCallback((stats: StatsSummary) => {
+      if (!selectedProxy) return;
+      if (stats.proxyDetailChain !== selectedProxy) return;
+      if (stats.proxyDomains) {
+        setWsProxyDomains(stats.proxyDomains);
+      }
+      if (stats.proxyIPs) {
+        setWsProxyIPs(stats.proxyIPs);
+      }
+    }, [selectedProxy]),
+  });
+
+  useEffect(() => {
+    setWsProxyDomains(null);
+    setWsProxyIPs(null);
+  }, [selectedProxy, activeBackendId]);
+
+  const hasWsProxyDetails =
+    wsDetailEnabled &&
+    wsDetailStatus === "connected" &&
+    wsProxyDomains !== null &&
+    wsProxyIPs !== null;
+
   const proxyDomainsQuery = useQuery({
     queryKey: getProxyDomainsQueryKey(selectedProxy, activeBackendId, detailTimeRange),
     queryFn: () =>
@@ -136,7 +172,7 @@ export function InteractiveProxyStats({
         activeBackendId,
         detailTimeRange,
       ),
-    enabled: !!activeBackendId && !!selectedProxy,
+    enabled: !!activeBackendId && !!selectedProxy && !hasWsProxyDetails,
     placeholderData: (previousData, previousQuery) =>
       keepPreviousByIdentity(previousData, previousQuery, {
         chain: selectedProxy ?? "",
@@ -152,7 +188,7 @@ export function InteractiveProxyStats({
         activeBackendId,
         detailTimeRange,
       ),
-    enabled: !!activeBackendId && !!selectedProxy,
+    enabled: !!activeBackendId && !!selectedProxy && !hasWsProxyDetails,
     placeholderData: (previousData, previousQuery) =>
       keepPreviousByIdentity(previousData, previousQuery, {
         chain: selectedProxy ?? "",
@@ -160,9 +196,9 @@ export function InteractiveProxyStats({
       }),
   });
 
-  const proxyDomains = proxyDomainsQuery.data ?? [];
-  const proxyIPs = proxyIPsQuery.data ?? [];
-  const loading = !!selectedProxy && !proxyDomainsQuery.data && !proxyIPsQuery.data;
+  const proxyDomains = hasWsProxyDetails ? wsProxyDomains ?? [] : proxyDomainsQuery.data ?? [];
+  const proxyIPs = hasWsProxyDetails ? wsProxyIPs ?? [] : proxyIPsQuery.data ?? [];
+  const loading = !!selectedProxy && !hasWsProxyDetails && !proxyDomainsQuery.data && !proxyIPsQuery.data;
 
   const handleProxyClick = useCallback((rawName: string) => {
     if (selectedProxy !== rawName) {
@@ -284,12 +320,12 @@ export function InteractiveProxyStats({
                   const barPercent = (item.value / maxTotal) * 100;
                   const isSelected = selectedProxy === item.rawName;
                   const badgeColor = item.rank === 0 ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" : item.rank === 1 ? "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300" : item.rank === 2 ? "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400" : "bg-muted text-muted-foreground";
+                  const rawDisplayName = item.rawName || item.name;
                   return (
                     <button key={item.rawName} onClick={() => handleProxyClick(item.rawName)} className={cn("w-full p-2.5 rounded-xl border text-left transition-all duration-200", isSelected ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border/50 bg-card/50 hover:bg-card hover:border-primary/30")}>
                       <div className="flex items-center gap-2 mb-1.5">
                         <span className={cn("w-5 h-5 rounded-md text-[10px] font-bold flex items-center justify-center shrink-0", badgeColor)}>{item.rank + 1}</span>
-                        <CountryFlag country={item.countryCode} className="h-3.5 w-5" />
-                        <span className="flex-1 text-sm font-medium truncate" title={item.name}>{item.name}</span>
+                        <span className="flex-1 text-sm font-medium truncate" title={rawDisplayName}>{rawDisplayName}</span>
                         <span className="text-sm font-bold tabular-nums shrink-0">{formatBytes(item.value)}</span>
                       </div>
                       <div className="pl-7 space-y-1">

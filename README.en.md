@@ -33,6 +33,7 @@
 - [📖 First Use](#-first-use)
 - [🔧 Port Conflict Resolution](#-port-conflict-resolution)
 - [🐳 Docker Configuration](#-docker-configuration)
+- [🌐 Reverse Proxy & Tunnel](#-reverse-proxy--tunnel)
 - [❓ FAQ](#-faq)
 - [📁 Project Structure](#-project-structure)
 - [🛠️ Tech Stack](#️-tech-stack)
@@ -56,7 +57,7 @@
 
 ### Option 1: Docker Compose (Recommended)
 
-Create a `docker-compose.yml` file:
+#### Scenario A: Minimal deployment (only expose 3000)
 
 ```yaml
 services:
@@ -66,16 +67,31 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000" # Web UI
-      - "3001:3001" # API
-      - "3002:3002" # WebSocket
     volumes:
       - ./data:/app/data
     environment:
       - NODE_ENV=production
-      # External ports (optional; defaults are 3000/3001/3002)
-      - WEB_EXTERNAL_PORT=3000
-      - API_EXTERNAL_PORT=3001
-      - WS_EXTERNAL_PORT=3002
+      - DB_PATH=/app/data/stats.db
+```
+
+> This mode is fully upgrade-compatible and works out of the box.  
+> If WS is not routed, the app falls back to HTTP polling automatically.
+
+#### Scenario B: Real-time WebSocket (recommended with reverse proxy)
+
+```yaml
+services:
+  clash-master:
+    image: foru17/clash-master:latest
+    container_name: clash-master
+    restart: unless-stopped
+    ports:
+      - "3000:3000" # Web UI
+      - "3002:3002" # WebSocket (for Nginx / Tunnel forwarding)
+    volumes:
+      - ./data:/app/data
+    environment:
+      - NODE_ENV=production
       - DB_PATH=/app/data/stats.db
 ```
 
@@ -89,24 +105,19 @@ Open <http://localhost:3000> to get started.
 
 ### Option 2: Docker Run
 
-**Minimal (recommended, only Web exposed):**
-
 ```bash
+# Minimal (only 3000)
 docker run -d \
   --name clash-master \
   -p 3000:3000 \
   -v $(pwd)/data:/app/data \
   --restart unless-stopped \
   foru17/clash-master:latest
-```
 
-**Optional (only if you need direct API / WebSocket access):**
-
-```bash
+# Real-time WS (with reverse proxy)
 docker run -d \
   --name clash-master \
   -p 3000:3000 \
-  -p 3001:3001 \
   -p 3002:3002 \
   -v $(pwd)/data:/app/data \
   --restart unless-stopped \
@@ -115,8 +126,8 @@ docker run -d \
 
 Open <http://localhost:3000> to get started.
 
-> The frontend uses same-origin `/api` by default, so only port 3000 is required.  
-> Only expose 3001/3002 if you need direct API/WS access or do not proxy `/api`/`/ws` in Nginx.
+> The frontend uses same-origin `/api` by default, so port 3001 is usually not required externally.  
+> For real-time WS, your reverse proxy/tunnel must be able to reach port `3002`. If not, the app falls back to ~5s HTTP polling.
 
 > If you use custom external ports with `docker run`, also pass:
 > `-e WEB_EXTERNAL_PORT=8080 -e API_EXTERNAL_PORT=8081 -e WS_EXTERNAL_PORT=8082`
@@ -183,7 +194,7 @@ Create a `.env` file in the same directory as `docker-compose.yml`:
 ```env
 WEB_EXTERNAL_PORT=8080    # Change Web UI port
 API_EXTERNAL_PORT=8081    # Change API port
-WS_EXTERNAL_PORT=8082     # Change WebSocket port
+WS_EXTERNAL_PORT=8082     # Change WebSocket external port (only for direct access)
 ```
 
 Then restart:
@@ -200,8 +211,7 @@ Now access <http://localhost:8080>
 ```yaml
 ports:
   - "8080:3000" # External 8080 → Internal 3000
-  - "8081:3001" # External 8081 → Internal 3001
-  - "8082:3002" # External 8082 → Internal 3002
+  - "8082:3002" # External 8082 → Internal 3002 (for proxy/tunnel WS forwarding)
 ```
 
 > Note: the frontend reads external ports at runtime, so `NEXT_PUBLIC_WS_PORT` is no longer required.
@@ -221,11 +231,106 @@ The script will automatically detect and suggest available ports.
 | Port |  Purpose  | External Required | Description |
 | :--: | :-------: | :---------------: | :---------- |
 | 3000 |  Web UI   |        ✅         | Frontend entry point |
-| 3001 |    API    |       Optional     | Only needed for direct access/debug; frontend uses `/api` by default |
-| 3002 | WebSocket |       Optional     | Real-time updates; can be proxied via Nginx `/ws` |
+| 3001 |    API    |       Optional     | Frontend uses same-origin `/api` by default; usually no external exposure needed |
+| 3002 | WebSocket |       Optional     | Real-time push endpoint; recommended to forward via reverse proxy/tunnel |
 
-> You only need to reverse-proxy the Web UI in Nginx. The frontend uses same-origin `/api` by default,
-> so 3001/3002 do not need to be exposed or configured unless you want direct API/WS access.
+### Environment Variables (Docker)
+
+| Variable | Default | Purpose | When to set |
+| :-- | :-- | :-- | :-- |
+| `WEB_PORT` | `3000` | Web service listen port (inside container) | Usually unchanged |
+| `API_PORT` | `3001` | API service listen port (inside container) | Usually unchanged |
+| `COLLECTOR_WS_PORT` | `3002` | WS service listen port (inside container) | Usually unchanged |
+| `DB_PATH` | `/app/data/stats.db` | SQLite data path | Custom data path |
+| `WEB_EXTERNAL_PORT` | `3000` | Runtime-exposed external web port | When external mapping changes |
+| `API_EXTERNAL_PORT` | `3001` | Runtime-exposed external API port | Only for direct API access |
+| `WS_EXTERNAL_PORT` | `3002` | Runtime-exposed external WS port | Only for direct WS access |
+| `NEXT_PUBLIC_API_URL` | empty | Override frontend API base URL | When API is not same-origin |
+| `NEXT_PUBLIC_WS_URL` | auto `/_cm_ws` | Override frontend WS URL | Only if you want custom WS path/host |
+
+### API / WS Resolution Priority
+
+1. API: `runtime-config(API_URL)` → `NEXT_PUBLIC_API_URL` → same-origin `/api`
+2. WS: `runtime-config(WS_URL)` → `NEXT_PUBLIC_WS_URL` → auto detection
+3. Default already uses same-origin `/_cm_ws`; no manual env required for normal deployments
+
+## 🌐 Reverse Proxy & Tunnel
+
+Recommended approach: keep Web and WS under the same domain, with path routing:
+`/` → `3000`, `/_cm_ws` → `3002`.
+
+### Nginx Standard Example
+
+```nginx
+server {
+  listen 443 ssl http2;
+  server_name clash.example.com;
+
+  location / {
+    proxy_pass http://<clash-master-host>:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location ^~ /_cm_ws {
+    proxy_pass http://<clash-master-host>:3002;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 86400;
+    proxy_send_timeout 86400;
+    proxy_buffering off;
+  }
+}
+```
+
+Optional env override:
+
+```env
+# Not required by default (already /_cm_ws)
+# NEXT_PUBLIC_WS_URL=/custom_ws
+```
+
+### Cloudflare Tunnel Standard Example
+
+`~/.cloudflared/config.yml`:
+
+```yaml
+tunnel: <your-tunnel-name-or-id>
+credentials-file: /path/to/<credentials>.json
+
+ingress:
+  - hostname: clash.example.com
+    path: /_cm_ws*
+    service: http://localhost:3002
+  - hostname: clash.example.com
+    path: /*
+    service: http://localhost:3000
+  - service: http_status:404
+```
+
+Run:
+
+```bash
+cloudflared tunnel --config ~/.cloudflared/config.yml run <your-tunnel-name-or-id>
+```
+
+For Zero Trust dashboard-managed routes (token mode), configure the same two routes and keep `/_cm_ws*` above `/*`.
+
+### Key Notes
+
+1. Do not use `ws` (without leading slash) as WS path; it can overmatch and cause `/_next/static/...` → `426 Upgrade Required`
+2. WS route must be above catch-all `/*`
+3. `NEXT_PUBLIC_WS_URL` is optional by default; if customized, restart frontend/container after changes
+4. Mapping only `3000` still works, but falls back to HTTP polling (~5s), with less real-time responsiveness
+5. `beacon.min.js` failures (Cloudflare analytics script) are typically unrelated to app API/WS data flow
+6. No extra `/api` reverse-proxy rule is required in most setups; frontend uses same-origin `/api` and app handles internal forwarding to `3001`
 
 ### Multi-Architecture Support
 
@@ -261,6 +366,24 @@ docker compose up -d
 1. Ports are modified in `.env` file
 2. Service is restarted: `docker compose restart`
 3. You're using the new port (e.g., `http://localhost:8080`)
+
+### Q: Will upgrading break users who only expose `3000:3000`?
+
+**A:** No. Core functionality remains available.  
+If WS is not routed, the app automatically falls back to HTTP polling.
+
+### Q: If WS forwarding is not configured, will it affect usage?
+
+**A:** Core features and data display still work.  
+The difference is real-time experience: without WS, updates are polling-based (about every 5 seconds).
+
+### Q: Why do I see `/_next/static/... 426 Upgrade Required`?
+
+**A:** WS route matching is usually too broad and static assets are being forwarded to the WS port. Check:
+
+1. In Cloudflare Tunnel / Nginx, do not use `ws` as path; use `/_cm_ws*`
+2. WS route priority must be above `/*`
+3. If `NEXT_PUBLIC_WS_URL` is manually set, ensure it matches your proxy path (for example `/_cm_ws`)
 
 ### Q: Failed to connect to OpenClash?
 
