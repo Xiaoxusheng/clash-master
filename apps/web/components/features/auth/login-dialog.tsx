@@ -1,0 +1,241 @@
+"use client";
+
+import { useState } from "react";
+import { useTranslations } from "next-intl";
+import { Lock, Eye, EyeOff, AlertCircle, Check, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { motion, AnimatePresence } from "framer-motion";
+import Image from "next/image";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
+
+const CAT_OPEN_EYE = "/images/neko-open-eye.png";
+const CAT_CLOSE_EYE = "/images/neko-open-close.png";
+
+interface LoginDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onLogin: (token: string) => Promise<boolean>;
+}
+
+export function LoginDialog({ open, onOpenChange, onLogin }: LoginDialogProps) {
+  const t = useTranslations("auth");
+  const [token, setToken] = useState("");
+  const [showToken, setShowToken] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSuccess, setIsSuccess] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!token.trim()) {
+      setError(t("tokenRequired"));
+      return;
+    }
+
+    setIsLoading(true);
+    setError("");
+
+    try {
+      const success = await onLogin(token);
+      if (success) {
+        setIsSuccess(true);
+        // Wait for animation
+        setTimeout(() => {
+          setToken("");
+          setIsSuccess(false);
+          onOpenChange(false);
+        }, 1500);
+      } else {
+        setError(t("invalidToken"));
+        setIsLoading(false);
+      }
+    } catch (err) {
+      setError(t("loginError"));
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent 
+        className="sm:max-w-md overflow-visible bg-transparent shadow-none border-none p-0"
+        showCloseButton={!isSuccess}
+        aria-describedby={undefined}
+      >
+        <AnimatePresence mode="wait">
+          {isSuccess ? (
+            <motion.div
+              key="success"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="flex flex-col items-center justify-center py-10 space-y-4 bg-background border shadow-lg rounded-lg p-6"
+            >
+              <div className="relative w-32 h-32 mb-4">
+                 <Image
+                  src={CAT_OPEN_EYE}
+                  alt="Success Cat"
+                  fill
+                  className="object-contain drop-shadow-xl"
+                  priority
+                />
+                <motion.div
+                  initial={{ scale: 0 }}
+                  animate={{ scale: 1 }}
+                  transition={{ type: "spring", stiffness: 200, damping: 10, delay: 0.1 }}
+                  className="absolute -bottom-2 -right-2 w-10 h-10 rounded-full bg-green-500 flex items-center justify-center text-white shadow-lg shadow-green-500/20 z-10"
+                >
+                  <Check className="w-6 h-6 stroke-[3]" />
+                </motion.div>
+              </div>
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.2 }}
+                className="text-center"
+              >
+                <h3 className="text-xl font-bold text-green-600 dark:text-green-400">
+                  {t("loginSuccess") || "Login Successful"}
+                </h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  {t("redirecting") || "Redirecting to dashboard..."}
+                </p>
+              </motion.div>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="form"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="relative"
+            >
+              {/* Cat Animation - Behind the card */}
+              <div className="absolute -top-28 left-1/2 -translate-x-1/2 z-0 pointer-events-none">
+                <div className="relative w-40 h-32 transition-transform duration-300 ease-in-out hover:scale-105">
+                     {/* Closed Eye Cat (Always present as base) */}
+                    <div className="absolute inset-0">
+                      <Image
+                        src={CAT_CLOSE_EYE}
+                        alt="Cat Closed Eyes"
+                        fill
+                        className="object-contain drop-shadow-2xl filter brightness-110"
+                        priority
+                      />
+                    </div>
+
+                    {/* Open Eye Cat (Overlay that fades out) */}
+                    <motion.div
+                      className="absolute inset-0"
+                      initial={{ opacity: 1 }}
+                      animate={{ opacity: isFocused ? 0 : 1 }}
+                      transition={{ duration: 0.2 }}
+                    >
+                      <Image
+                        src={CAT_OPEN_EYE}
+                        alt="Cat Open Eyes"
+                        fill
+                        className="object-contain drop-shadow-2xl filter brightness-110"
+                        priority
+                      />
+                    </motion.div>
+                </div>
+              </div>
+
+              {/* Card Content - In front of the cat */}
+              <div className="relative z-10 bg-background border shadow-lg rounded-lg p-6 pt-10">
+                <DialogTitle className="sr-only">
+                  {t("loginTitle")}
+                </DialogTitle>
+
+              <form onSubmit={handleSubmit} className="space-y-4 mt-4">
+                <div className="space-y-2">
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input
+                      type={showToken ? "text" : "password"}
+                      placeholder={t("tokenPlaceholder")}
+                      value={token}
+                      onChange={(e) => setToken(e.target.value)}
+                      onFocus={() => setIsFocused(true)}
+                      onBlur={() => setIsFocused(false)}
+                      className={cn(
+                        "pl-10 pr-10",
+                        error && "border-destructive focus-visible:ring-destructive"
+                      )}
+                      disabled={isLoading}
+                      autoComplete="off"
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowToken(!showToken)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                      tabIndex={-1}
+                    >
+                      {showToken ? (
+                        <EyeOff className="w-4 h-4" />
+                      ) : (
+                        <Eye className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
+
+                  {error && (
+                    <div className="flex items-center gap-2 text-sm text-destructive">
+                      <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                      <span>{error}</span>
+                    </div>
+                  )}
+                </div>
+
+                <Button
+                  type="submit"
+                  className="w-full relative overflow-hidden bg-gradient-to-r from-[#181878] via-[#668af4] to-[#181878] hover:opacity-90 transition-all border-none animate-gradient-x disabled:opacity-100"
+                  disabled={isLoading || !token.trim()}
+                >
+                  <AnimatePresence mode="wait">
+                    {isLoading ? (
+                      <motion.div
+                        key="loading"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -10 }}
+                        className="flex items-center gap-2"
+                      >
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        {t("loggingIn")}
+                      </motion.div>
+                    ) : (
+                      <motion.span
+                        key="label"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -10 }}
+                      >
+                        {t("login")}
+                      </motion.span>
+                    )}
+                  </AnimatePresence>
+                </Button>
+              </form>
+
+              </div>
+            </motion.div>
+
+          )}
+        </AnimatePresence>
+      </DialogContent>
+    </Dialog>
+  );
+}

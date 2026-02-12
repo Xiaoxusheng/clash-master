@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useTranslations } from "next-intl";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Server,
   Plus,
@@ -11,6 +12,7 @@ import {
   X,
   RefreshCw,
   AlertCircle,
+  ShieldAlert,
   CheckCircle2,
   Database,
   HardDrive,
@@ -20,6 +22,10 @@ import {
   Eye,
   SlidersHorizontal,
   Globe,
+  Shield,
+  Lock,
+  EyeOff,
+  Key,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,6 +41,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { cn, formatBytes, formatNumber } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
@@ -43,6 +57,7 @@ import { useSettings, FaviconProvider, getFaviconUrl } from "@/lib/settings";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Separator } from "@/components/ui/separator";
+import { useAuthState, authKeys, getStoredToken } from "@/lib/auth-queries";
 
 // Favicon Provider Preview Component
 function FaviconProviderPreview({
@@ -302,7 +317,7 @@ export function BackendConfigDialog({
     message: string;
   } | null>(null);
   const [activeTab, setActiveTab] = useState<
-    "backends" | "database" | "preferences"
+    "backends" | "database" | "preferences" | "security"
   >("backends");
   const { settings, setSettings } = useSettings();
   const [dbStats, setDbStats] = useState<DbStats | null>(null);
@@ -332,8 +347,27 @@ export function BackendConfigDialog({
   const [errorMessage, setErrorMessage] = useState("");
 
   // Success Alert Dialog State
-  const [successDialogOpen, setSuccessDialogOpen] = useState(false);
-  const [successMessage, setSuccessMessage] = useState("");
+
+
+  // React Query Client
+  const queryClient = useQueryClient();
+
+  // Auth State from React Query
+  const { data: authState } = useAuthState();
+  const authEnabled = authState?.enabled ?? false;
+
+  // Local auth form state
+  const [authToken, setAuthToken] = useState("");
+  const [showAuthToken, setShowAuthToken] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [confirmEnableAuthDialogOpen, setConfirmEnableAuthDialogOpen] = useState(false);
+  const [confirmDisableAuthDialogOpen, setConfirmDisableAuthDialogOpen] = useState(false);
+  const [changeTokenDialogOpen, setChangeTokenDialogOpen] = useState(false);
+  const [changeTokenForm, setChangeTokenForm] = useState({
+    current: "",
+    new: "",
+    confirm: "",
+  });
 
   // Verify Animation State
   const [showVerifyAnimation, setShowVerifyAnimation] = useState(false);
@@ -693,13 +727,103 @@ export function BackendConfigDialog({
       await api.clearLogs(clearLogsDays);
       await loadDbStats();
       setClearLogsDialogOpen(false);
-      setSuccessMessage(t("logsCleared"));
-      setSuccessDialogOpen(true);
+      toast.success(t("logsCleared"));
     } catch (error: any) {
       setErrorMessage(error.message || "Failed to clear logs");
       setErrorDialogOpen(true);
     } finally {
       setClearingLogs(false);
+    }
+  };
+
+  const [isTokenInvalid, setIsTokenInvalid] = useState(false);
+  const tokenInputRef = useRef<HTMLInputElement>(null);
+
+  // Validate token format
+  const isValidToken = (token: string): boolean => {
+    if (token.length < 6) return false;
+    const hasLetter = /[a-zA-Z]/.test(token);
+    const hasNumber = /[0-9]/.test(token);
+    return hasLetter && hasNumber;
+  };
+
+  // Handle enable auth
+  const handleEnableAuth = async () => {
+    if (!isValidToken(authToken)) {
+      // toast.error(t("invalidToken"));
+      setIsTokenInvalid(true);
+      tokenInputRef.current?.focus();
+      return;
+    }
+    setConfirmEnableAuthDialogOpen(true);
+  };
+
+  // Confirm enable auth
+  const confirmEnableAuth = async () => {
+    setAuthLoading(true);
+    try {
+      await api.enableAuth(authToken);
+      setAuthToken("");
+      setConfirmEnableAuthDialogOpen(false);
+      // Invalidate auth state cache to trigger refetch
+      queryClient.invalidateQueries({ queryKey: authKeys.state() });
+      toast.success(t("auth.enabledSuccess"));
+    } catch (error: any) {
+      toast.error(error.message || t("auth.enableFailed"));
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // Handle disable auth
+  const handleDisableAuth = async () => {
+    setConfirmDisableAuthDialogOpen(true);
+  };
+
+  // Confirm disable auth
+  const confirmDisableAuth = async () => {
+    setAuthLoading(true);
+    try {
+      // Try to get stored token for verification
+      const storedToken = getStoredToken();
+      await api.disableAuth(storedToken || undefined);
+      setAuthToken("");
+      setConfirmDisableAuthDialogOpen(false);
+      // Invalidate auth state cache to trigger refetch
+      queryClient.invalidateQueries({ queryKey: authKeys.state() });
+      toast.success(t("auth.disabledSuccess"));
+    } catch (error: any) {
+      toast.error(error.message || t("auth.disableFailed"));
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleChangeToken = async () => {
+    if (!changeTokenForm.new || changeTokenForm.new.length < 6) {
+      toast.error(t("auth.invalidToken"));
+      return;
+    }
+    if (changeTokenForm.new !== changeTokenForm.confirm) {
+        toast.error(t("auth.passwordsDoNotMatch")); 
+        return;
+    }
+
+    setAuthLoading(true);
+    try {
+        const res = await api.updateToken(changeTokenForm.current, changeTokenForm.new);
+        if (res.success) {
+            setChangeTokenForm({ current: "", new: "", confirm: "" });
+            setChangeTokenDialogOpen(false);
+            toast.success(t("auth.tokenUpdated"));
+        } else {
+            throw new Error(res.message || commonT("error"));
+        }
+    } catch (error: any) {
+        setErrorMessage(error.message || t("auth.updateTokenFailed"));
+        setErrorDialogOpen(true);
+    } finally {
+        setAuthLoading(false);
     }
   };
 
@@ -755,18 +879,25 @@ export function BackendConfigDialog({
                 {t("backendsTab")}
               </Button>
               <Button
-                variant={activeTab === "database" ? "default" : "ghost"}
-                size="sm"
-                onClick={() => setActiveTab("database")}>
-                <Database className="w-4 h-4 mr-2" />
-                {t("databaseTab")}
-              </Button>
-              <Button
                 variant={activeTab === "preferences" ? "default" : "ghost"}
                 size="sm"
                 onClick={() => setActiveTab("preferences")}>
                 <SlidersHorizontal className="w-4 h-4 mr-2" />
                 {t("preferencesTab")}
+              </Button>
+              <Button
+                variant={activeTab === "security" ? "default" : "ghost"}
+                size="sm"
+                onClick={() => setActiveTab("security")}>
+                <Shield className="w-4 h-4 mr-2" />
+                {t("securityTab")}
+              </Button>
+              <Button
+                variant={activeTab === "database" ? "default" : "ghost"}
+                size="sm"
+                onClick={() => setActiveTab("database")}>
+                <Database className="w-4 h-4 mr-2" />
+                {t("databaseTab")}
               </Button>
             </div>
           </CardHeader>
@@ -1134,6 +1265,149 @@ export function BackendConfigDialog({
                   </Button>
                 ) : null}
               </div>
+            ) : activeTab === "preferences" ? (
+              <div className="space-y-6">
+                {/* Favicon Provider */}
+                <div className="p-4 rounded-lg border bg-card">
+                  <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                    <Globe className="w-4 h-4" />
+                    {t("faviconProvider")}
+                  </h4>
+                  <p className="text-sm text-muted-foreground mb-4">
+                    {t("faviconProviderDescription")}
+                  </p>
+
+                  {/* Favicon Preview */}
+                  <FaviconProviderPreview
+                    selected={settings.faviconProvider}
+                    onChange={(value) =>
+                      setSettings({ faviconProvider: value })
+                    }
+                    t={t}
+                  />
+                </div>
+              </div>
+            ) : activeTab === "security" ? (
+              <div className="space-y-6">
+                {authState?.forceAccessControlOff && (
+                  <div className="rounded-md bg-destructive/15 p-3 text-sm text-destructive dark:bg-destructive/10">
+                    <div className="flex items-center gap-2 font-medium">
+                      <ShieldAlert className="h-4 w-4" />
+                      {t("auth.forceOffWarningTitle") || "Emergency Access Mode Active"}
+                    </div>
+                    <p className="mt-1 ml-6 text-xs opacity-90">
+                      {t("auth.forceOffWarningDescription") || "Authentication is forced off via environment variable. You can reset your password without providing the current one."}
+                    </p>
+                  </div>
+                )}
+
+                {/* Authentication Settings */}
+                <div className="p-4 rounded-lg border bg-card">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                      <Shield className="w-4 h-4 text-primary" />
+                      <h4 className="text-sm font-medium">{t("auth.title")}</h4>
+                    </div>
+                    <Switch
+                      checked={authEnabled}
+                      onCheckedChange={(checked) => {
+                        if (checked) {
+                          handleEnableAuth();
+                        } else {
+                          handleDisableAuth();
+                        }
+                       }}
+                       disabled={authLoading}
+                    />
+                  </div>
+
+                  <p className="text-sm text-muted-foreground mb-4">
+                    {t("auth.description")}
+                  </p>
+
+                  {/* Show set password UI when auth is disabled OR forced off */}
+                  {(!authEnabled || (authState?.forceAccessControlOff && !authEnabled)) && (
+                    <div className="space-y-3">
+                      <div className="relative">
+                        <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                        <Input
+                          ref={tokenInputRef}
+                          type={showAuthToken ? "text" : "password"}
+                          placeholder={t("auth.tokenPlaceholder")}
+                          value={authToken}
+                          onChange={(e) => {
+                            setAuthToken(e.target.value);
+                            setIsTokenInvalid(false);
+                          }}
+                          className={cn(
+                            "pl-10 pr-10 transition-all duration-200",
+                            isTokenInvalid && "border-destructive ring-destructive/20 focus-visible:ring-destructive"
+                          )}
+                          disabled={authLoading}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowAuthToken(!showAuthToken)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          {showAuthToken ? (
+                            <EyeOff className="w-4 h-4" />
+                          ) : (
+                            <Eye className="w-4 h-4" />
+                          )}
+                        </button>
+                      </div>
+
+                      {isTokenInvalid && (
+                        <p className="text-xs text-destructive animate-in slide-in-from-top-1 duration-200">
+                          {t("auth.tokenRequirements") || "Token must be at least 6 characters and contain both letters and numbers"}
+                        </p>
+                      )}
+
+                      {!isTokenInvalid && authToken && !isValidToken(authToken) && (
+                        <p className="text-xs text-destructive">
+                          {t("auth.tokenRequirements")}
+                        </p>
+                      )}
+
+                      <p className="text-xs text-muted-foreground">
+                        {t("auth.tokenHint")}
+                      </p>
+                    </div>
+                  )}
+
+                  {authEnabled && (
+                    <div className="flex items-center justify-between p-3 rounded-lg bg-green-500/10 border border-green-500/20">
+                      <div className="flex items-center gap-2 text-sm text-green-600">
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>{t("auth.enabled")}</span>
+                      </div>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="h-8 bg-background/50 hover:bg-background/80 border-green-500/30 text-green-700 dark:text-green-400"
+                        onClick={() => setChangeTokenDialogOpen(true)}
+                      >
+                        <Key className="w-3.5 h-3.5 mr-1.5" />
+                        {authState?.forceAccessControlOff ? "Reset Password" : t("auth.changeToken")}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Warning when auth is enabled */}
+                {authEnabled && !authState?.forceAccessControlOff && (
+                  <div className="p-4 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-900">
+                    <div className="flex items-start gap-3">
+                      <AlertCircle className="w-4 h-4 text-amber-600 mt-0.5" />
+                      <div className="text-sm text-amber-800 dark:text-amber-200">
+                        <p className="font-medium">{t("auth.warningTitle")}</p>
+                        <p className="mt-1">{t("auth.warningDescription")}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             ) : activeTab === "database" ? (
               // Database Tab
               <div className="space-y-6">
@@ -1144,16 +1418,16 @@ export function BackendConfigDialog({
                     {t("databaseStats")}
                   </h4>
                   <div className="grid grid-cols-2 gap-4">
-                    <div className="p-3 rounded-lg bg-muted">
-                      <div className="text-xs text-muted-foreground">
+                    <div className="p-3 rounded-lg bg-muted flex flex-col justify-between h-full">
+                      <div className="text-xs text-muted-foreground mb-1">
                         {t("dbSize")}
                       </div>
                       <div className="text-lg font-semibold">
                         {dbStats ? formatBytes(dbStats.size) : "--"}
                       </div>
                     </div>
-                    <div className="p-3 rounded-lg bg-muted">
-                      <div className="text-xs text-muted-foreground">
+                    <div className="p-3 rounded-lg bg-muted flex flex-col justify-between h-full">
+                      <div className="text-xs text-muted-foreground mb-1">
                         {t("connectionsCount")}
                       </div>
                       <div className="text-lg font-semibold">
@@ -1275,30 +1549,7 @@ export function BackendConfigDialog({
                   </div>
                 </div>
               </div>
-            ) : (
-              // Preferences Tab
-              <div className="space-y-6">
-                {/* Favicon Provider */}
-                <div className="p-4 rounded-lg border bg-card">
-                  <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
-                    <Globe className="w-4 h-4" />
-                    {t("faviconProvider")}
-                  </h4>
-                  <p className="text-sm text-muted-foreground mb-4">
-                    {t("faviconProviderDescription")}
-                  </p>
-
-                  {/* Favicon Preview */}
-                  <FaviconProviderPreview
-                    selected={settings.faviconProvider}
-                    onChange={(value) =>
-                      setSettings({ faviconProvider: value })
-                    }
-                    t={t}
-                  />
-                </div>
-              </div>
-            )}
+            ) : null}
 
             {/* Close button for non-first-time */}
             {!isFirstTime && (
@@ -1380,23 +1631,142 @@ export function BackendConfigDialog({
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Success Alert Dialog */}
-      <AlertDialog open={successDialogOpen} onOpenChange={setSuccessDialogOpen}>
+
+
+      {/* Confirm Enable Auth Dialog */}
+      <AlertDialog
+        open={confirmEnableAuthDialogOpen}
+        onOpenChange={setConfirmEnableAuthDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5 text-green-500" />
-              {commonT("success") || "Success"}
+              <Shield className="h-5 w-5 text-amber-500" />
+              {authState?.forceAccessControlOff 
+                ? t("auth.emergencyResetTitle")
+                : t("auth.confirmEnableTitle")}
             </AlertDialogTitle>
-            <AlertDialogDescription>{successMessage}</AlertDialogDescription>
+            <AlertDialogDescription asChild className="space-y-2">
+              <div className="text-sm text-muted-foreground">
+                <p>
+                  {authState?.forceAccessControlOff
+                    ? t("auth.emergencyResetDescription")
+                    : t("auth.confirmEnableDescription")}
+                </p>
+                <p className="font-medium text-amber-600 dark:text-amber-400">
+                  {authState?.forceAccessControlOff
+                    ? t("auth.emergencyResetWarning")
+                    : t("auth.rememberTokenWarning")}
+                </p>
+              </div>
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogAction onClick={() => setSuccessDialogOpen(false)}>
-              {commonT("ok") || "OK"}
+            <AlertDialogCancel
+              onClick={() => setConfirmEnableAuthDialogOpen(false)}>
+              {commonT("cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmEnableAuth}
+              className="bg-primary">
+              {authState?.forceAccessControlOff ? t("auth.changeToken") : t("auth.confirmEnable")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Confirm Disable Auth Dialog */}
+      <AlertDialog
+        open={confirmDisableAuthDialogOpen}
+        onOpenChange={setConfirmDisableAuthDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <Shield className="h-5 w-5 text-destructive" />
+              {t("auth.confirmDisableTitle")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("auth.confirmDisableDescription")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => setConfirmDisableAuthDialogOpen(false)}>
+              {commonT("cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDisableAuth}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              {t("auth.confirmDisable")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Change Token Dialog */}
+      <Dialog open={changeTokenDialogOpen} onOpenChange={setChangeTokenDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("auth.changeTokenTitle")}</DialogTitle>
+            <DialogDescription>
+              {t("auth.changeTokenDescription")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            {!authState?.forceAccessControlOff && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">{t("auth.currentToken")}</label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-2.5 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    type="password"
+                    value={changeTokenForm.current}
+                    onChange={(e) => setChangeTokenForm({ ...changeTokenForm, current: e.target.value })}
+                    className="pl-9"
+                  />
+                </div>
+              </div>
+            )}
+            <div className="space-y-2">
+              <label className="text-sm font-medium">{t("auth.newToken")}</label>
+              <div className="relative">
+                <Key className="absolute left-3 top-2.5 w-4 h-4 text-muted-foreground" />
+                <Input
+                  type="password"
+                  value={changeTokenForm.new}
+                  onChange={(e) => setChangeTokenForm({ ...changeTokenForm, new: e.target.value })}
+                  className="pl-9"
+                />
+              </div>
+              {changeTokenForm.new && !isValidToken(changeTokenForm.new) && (
+                <p className="text-xs text-destructive">{t("auth.tokenRequirements")}</p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">{t("auth.confirmNewToken")}</label>
+              <div className="relative">
+                <Key className="absolute left-3 top-2.5 w-4 h-4 text-muted-foreground" />
+                <Input
+                  type="password"
+                  value={changeTokenForm.confirm}
+                  onChange={(e) => setChangeTokenForm({ ...changeTokenForm, confirm: e.target.value })}
+                  className="pl-9"
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setChangeTokenDialogOpen(false)}>
+              {commonT("cancel")}
+            </Button>
+            <Button 
+                onClick={handleChangeToken} 
+                disabled={authLoading || (!authState?.forceAccessControlOff && !changeTokenForm.current) || !changeTokenForm.new || !isValidToken(changeTokenForm.new)}
+            >
+              {commonT("confirm")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Verification Animation */}
       <BackendVerifyAnimation

@@ -13,6 +13,7 @@ import {
   Monitor,
   MoreVertical,
   Info,
+  LogOut,
 } from "lucide-react";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
@@ -48,6 +49,8 @@ interface Backend {
   is_active: boolean;
   listening: boolean;
 }
+
+import { useAuth } from "@/lib/auth";
 
 interface HeaderProps {
   // Backend data
@@ -113,6 +116,8 @@ export function Header({
   backendT,
   dashboardT,
 }: HeaderProps) {
+  const { logout, authState } = useAuth();
+
   return (
     <header className="sticky top-0 z-40 border-b border-border/40 bg-background/80 backdrop-blur-md">
       <div className="flex items-center justify-between h-14 px-4 lg:px-6">
@@ -276,7 +281,19 @@ export function Header({
               onChange={onTimeRangeChange}
             />
             <LanguageSwitcher />
+
             <ThemeToggle />
+            {authState?.enabled && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={logout}
+                title={dashboardT("logout")}
+                className="h-9 w-9 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+              >
+                <LogOut className="w-4 h-4" />
+              </Button>
+            )}
           </div>
 
           {/* Mobile: Time range picker */}
@@ -435,6 +452,15 @@ export function Header({
                   <Info className="w-4 h-4 mr-2 text-primary" />
                   About
                 </DropdownMenuItem>
+                {authState?.enabled && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={logout} className="text-destructive focus:text-destructive focus:bg-destructive/10">
+                      <LogOut className="w-4 h-4 mr-2" />
+                      {dashboardT("logout")}
+                    </DropdownMenuItem>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>

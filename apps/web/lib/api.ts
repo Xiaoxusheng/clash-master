@@ -9,6 +9,7 @@ import type {
   ProxyTrafficStats,
   DeviceStats,
 } from "@neko-master/shared";
+import { getAuthHeaders } from "./auth-queries";
 
 type RuntimeConfig = {
   API_URL?: string;
@@ -71,12 +72,15 @@ async function fetchJson<T>(
 
   const options: RequestInit = {
     method,
-    headers: {},
+    headers: {
+      ...getAuthHeaders(),
+    },
   };
 
   // Only set Content-Type when there's a body
   if (body && method !== 'GET') {
     options.headers = {
+      ...options.headers,
       'Content-Type': 'application/json',
     };
     options.body = JSON.stringify(body);
@@ -85,6 +89,12 @@ async function fetchJson<T>(
   const requestPromise = (async () => {
     const res = await fetch(url, options);
     if (!res.ok) {
+      // If 401, dispatch an event to notify auth system
+      if (res.status === 401) {
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("api:unauthorized"));
+        }
+      }
       throw new ApiError(res.status, url);
     }
     return await res.json() as T;
@@ -530,6 +540,22 @@ export const api = {
 
   updateRetentionConfig: (config: { connectionLogsDays: number; hourlyStatsDays: number; autoCleanup?: boolean }) =>
     fetchJson<{ message: string }>(`${API_BASE}/db/retention`, 'PUT', config),
+
+  // Auth management
+  getAuthState: () =>
+    fetchJson<{ enabled: boolean; hasToken: boolean }>(`${API_BASE}/auth/state`),
+
+  enableAuth: (token: string) =>
+    fetchJson<{ success: boolean; message: string }>(`${API_BASE}/auth/enable`, 'POST', { token }),
+
+  disableAuth: (token?: string) =>
+    fetchJson<{ success: boolean; message: string }>(`${API_BASE}/auth/disable`, 'POST', token ? { token } : undefined),
+
+  verifyAuth: (token: string) =>
+    fetchJson<{ valid: boolean; message?: string }>(`${API_BASE}/auth/verify`, 'POST', { token }),
+
+  updateToken: (currentToken: string, newToken: string) =>
+    fetchJson<{ success: boolean; message: string }>(`${API_BASE}/auth/token`, 'PUT', { currentToken, newToken }),
 };
 
 // Helper functions for time range

@@ -431,6 +431,22 @@ export class StatsDatabase {
         ('retention.auto_cleanup', '1');
     `);
 
+    // Auth configuration table - stores authentication settings
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS auth_config (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Insert default auth config if not exists
+    this.db.exec(`
+      INSERT OR IGNORE INTO auth_config (key, value) VALUES 
+        ('enabled', '0'),
+        ('token_hash', '');
+    `);
+
     // Migrate existing data if needed (from single-backend schema)
     this.migrateIfNeeded();
   }
@@ -5232,6 +5248,44 @@ export class StatsDatabase {
       oldestConnectionLog: (oldestLogStmt.get() as { ts: string | null })?.ts || null,
       oldestHourlyStat: (oldestHourlyStmt.get() as { hr: string | null })?.hr || null,
     };
+  }
+
+  // Auth Configuration Methods
+
+  // Get auth configuration
+  getAuthConfig(): { enabled: boolean; tokenHash: string | null; updatedAt: string } {
+    const enabledStmt = this.db.prepare(`
+      SELECT value, updated_at FROM auth_config WHERE key = 'enabled'
+    `);
+    const tokenStmt = this.db.prepare(`
+      SELECT value, updated_at FROM auth_config WHERE key = 'token_hash'
+    `);
+
+    const enabledRow = enabledStmt.get() as { value: string; updated_at: string } | undefined;
+    const tokenRow = tokenStmt.get() as { value: string; updated_at: string } | undefined;
+
+    return {
+      enabled: enabledRow?.value === '1',
+      tokenHash: tokenRow?.value || null,
+      updatedAt: tokenRow?.updated_at || enabledRow?.updated_at || new Date().toISOString(),
+    };
+  }
+
+  // Update auth configuration
+  updateAuthConfig(updates: { enabled?: boolean; tokenHash?: string | null }): void {
+    if (updates.enabled !== undefined) {
+      this.db.prepare(`
+        INSERT INTO auth_config (key, value) VALUES ('enabled', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+      `).run(updates.enabled ? '1' : '0');
+    }
+
+    if (updates.tokenHash !== undefined) {
+      this.db.prepare(`
+        INSERT INTO auth_config (key, value) VALUES ('token_hash', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+      `).run(updates.tokenHash || '');
+    }
   }
 
   close() {

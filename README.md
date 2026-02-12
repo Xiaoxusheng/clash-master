@@ -352,6 +352,61 @@ docker compose pull
 docker compose up -d
 ```
 
+## 🔐 认证与安全
+
+Neko Master 支持访问鉴权功能，保护你的面板数据安全。
+
+### 开启/关闭鉴权
+
+1. 进入面板，点击左侧边栏底部的「设置」。
+2. 切换到「安全」标签页。
+3. 在此页面可以开启/关闭访问控制，并设置访问令牌（Token）。
+
+### 忘记密码（重置访问令牌）
+
+如果你忘记了访问令牌，可以通过环境变量 `FORCE_ACCESS_CONTROL_OFF` 强制进入**紧急访问模式**。
+
+#### Docker Compose 用户
+
+1. 修改 `docker-compose.yml`，在 `environment` 下添加：
+
+   ```yaml
+   environment:
+     - FORCE_ACCESS_CONTROL_OFF=true
+   ```
+
+2. 重启容器：
+
+   ```bash
+   docker compose up -d
+   ```
+
+3. 刷新页面，你将看到“紧急访问模式”警告。此时无需旧密码即可在「设置 -> 安全」中重置新令牌。
+
+4. **重要**：重置完成后，务必删除该环境变量并再次重启容器，以恢复访问控制。
+
+#### Docker 命令行用户
+
+1. 停止并删除旧容器（数据在挂载卷中，不会丢失）：
+
+   ```bash
+   docker stop neko-master
+   docker rm neko-master
+   ```
+
+2. 添加 `-e FORCE_ACCESS_CONTROL_OFF=true` 参数重新启动：
+
+   ```bash
+   docker run -d \
+     --name neko-master \
+     -p 3000:3000 \
+     -v $(pwd)/data:/app/data \
+     -e FORCE_ACCESS_CONTROL_OFF=true \
+     foru17/neko-master:latest
+   ```
+
+3. 重置密码后，再次停止容器，去除该参数并重启，恢复正常保护模式。
+
 ## ❓ 常见问题
 
 ### Q: 提示 "端口已被占用" 怎么办？

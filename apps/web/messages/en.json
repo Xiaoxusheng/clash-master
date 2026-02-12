@@ -42,7 +42,8 @@
     "backendHealthy": "Backend healthy",
     "backendUnavailable": "Backend unavailable",
     "backendUnavailableHint": "Data collection is interrupted. Please check backend connectivity.",
-    "backendStatusUnknown": "Backend status unknown"
+    "backendStatusUnknown": "Backend status unknown",
+    "logout": "Logout"
   },
   "timeRangePicker": {
     "quickRange": "Quick Range",
@@ -328,6 +329,16 @@
     "en": "English",
     "zh": "中文"
   },
+  "auth": {
+    "loginTitle": "Secure Login",
+    "loginDescription": "Please enter your access token to continue",
+    "tokenPlaceholder": "Enter access token",
+    "tokenRequired": "Please enter access token",
+    "invalidToken": "Invalid access token",
+    "loginError": "Login failed, please try again",
+    "loggingIn": "Logging in...",
+    "login": "Login"
+  },
   "backend": {
     "title": "Settings",
     "firstTimeTitle": "Configure Gateway Backend",
@@ -335,6 +346,7 @@
     "description": "Manage backend connections and database",
     "backendsTab": "Backends",
     "databaseTab": "Database",
+    "securityTab": "Security",
     "name": "Name",
     "host": "Host",
     "port": "Port",
@@ -397,6 +409,42 @@
     "retentionCustomDesc": "Set your own storage period (max 90 days)",
     "retentionDays": "{days} days",
     "retentionUpdated": "Storage settings saved",
-    "retentionUpdateFailed": "Failed to save settings"
+    "retentionUpdateFailed": "Failed to save settings",
+    "invalidToken": "Invalid token format",
+    "auth": {
+      "title": "Access Control",
+      "description": "Enable access control to protect your dashboard data",
+      "tokenPlaceholder": "Set access token",
+      "tokenRequirements": "Token must be at least 6 characters with both letters and numbers",
+      "tokenHint": "Set a memorable but hard-to-guess token",
+      "enabled": "Access control enabled",
+      "enabledSuccess": "Access control enabled, please remember your token",
+      "enableFailed": "Failed to enable access control",
+      "disabledSuccess": "Access control disabled",
+      "disableFailed": "Failed to disable access control",
+      "warningTitle": "Important Notice",
+      "warningDescription": "Please keep your access token safe. If you lose it, you won't be able to access the dashboard.",
+      "confirmEnableTitle": "Confirm Enable Access Control",
+      "confirmEnableDescription": "After enabling access control, all users will need to enter the correct token to access the dashboard.",
+      "rememberTokenWarning": "Please remember this token! You won't be able to access the dashboard if you lose it!",
+      "confirmEnable": "I have remembered the token, confirm enable",
+      "confirmDisableTitle": "Confirm Disable Access Control",
+      "confirmDisableDescription": "After disabling access control, anyone can access your dashboard. Are you sure?",
+      "confirmDisable": "Confirm Disable",
+      "changeToken": "Change Token",
+      "changeTokenTitle": "Change Access Token",
+      "changeTokenDescription": "Update your access token to a new one",
+      "currentToken": "Current Token",
+      "newToken": "New Token",
+      "confirmNewToken": "Confirm New Token",
+      "tokenUpdated": "Access token updated successfully",
+      "updateTokenFailed": "Failed to update access token",
+      "passwordsDoNotMatch": "New tokens do not match",
+      "forceOffWarningTitle": "Emergency Access Mode Active",
+      "forceOffWarningDescription": "Authentication is forced off via environment variable. You can reset your password without providing the current one.",
+      "emergencyResetTitle": "Confirm Token Reset",
+      "emergencyResetDescription": "You are currently in Emergency Access Mode. After resetting the token, the old one will be invalid.",
+      "emergencyResetWarning": "For your security, please remove the backend environment variable FORCE_ACCESS_CONTROL_OFF and restart the service after the reset is complete."
+    }
   }
 }

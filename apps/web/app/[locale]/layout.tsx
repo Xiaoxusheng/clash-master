@@ -3,6 +3,8 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "../globals.css";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { QueryProvider } from "@/components/providers/query-provider";
+import { AuthProvider } from "@/lib/auth";
+import { AuthGuard } from "@/components/features/auth/auth-guard";
 import { NextIntlClientProvider } from "next-intl";
 import { getMessages } from "next-intl/server";
 import { notFound } from "next/navigation";
@@ -76,11 +78,14 @@ export default async function RootLayout({
       </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
           <QueryProvider>
-            <NextIntlClientProvider messages={messages}>
-              {children}
-            </NextIntlClientProvider>
+            <AuthProvider>
+              <NextIntlClientProvider messages={messages}>
+                <AuthGuard />
+                {children}
+              </NextIntlClientProvider>
+            </AuthProvider>
           </QueryProvider>
         </ThemeProvider>
         <ServiceWorkerRegister />

@@ -1,4 +1,14 @@
 import { config } from 'dotenv';
+import path from 'path';
+import fs from 'fs';
+
+// Load .env.local if it exists (takes precedence over .env, but not shell)
+const envLocalPath = path.join(process.cwd(), '.env.local');
+if (fs.existsSync(envLocalPath)) {
+  config({ path: envLocalPath });
+}
+
+// Load .env (defaults)
 config();
 
 import { StatsDatabase, BackendConfig } from './db.js';
@@ -10,7 +20,6 @@ let wsServer: StatsWebSocketServer;
 
 import { APIServer } from './app.js';
 import { GeoIPService } from './geo-service.js';
-import path from 'path';
 
 const COLLECTOR_WS_PORT = parseInt(process.env.COLLECTOR_WS_PORT || '3002');
 const API_PORT = parseInt(process.env.API_PORT || '3001');

@@ -2,6 +2,9 @@ import { WebSocketServer as WSServer, WebSocket } from 'ws';
 import type { StatsSummary } from '@neko-master/shared';
 import type { StatsDatabase } from './db.js';
 import { realtimeStore } from './realtime.js';
+import { AuthService } from './modules/auth/auth.service.js';
+import { IncomingMessage } from 'http';
+import { URL } from 'url';
 
 export interface WebSocketMessage {
   type: 'stats' | 'ping' | 'pong' | 'subscribe';
@@ -97,6 +100,7 @@ interface ClientInfo {
 export class StatsWebSocketServer {
   private wss: WSServer | null = null;
   private db: StatsDatabase;
+  private authService: AuthService;
   private clients: Map<WebSocket, ClientInfo> = new Map();
   private port: number;
   private lastBroadcastTime = 0;
@@ -105,6 +109,7 @@ export class StatsWebSocketServer {
   constructor(port: number, db: StatsDatabase) {
     this.port = port;
     this.db = db;
+    this.authService = new AuthService(db);
   }
 
   start() {
@@ -114,8 +119,36 @@ export class StatsWebSocketServer {
       perMessageDeflate: false,
     });
 
-    this.wss.on('connection', (ws: WebSocket, req) => {
-      console.log(`[WebSocket] Connection from ${req.socket.remoteAddress}`);
+    this.wss.on('connection', async (ws: WebSocket, req: IncomingMessage) => {
+      console.log(`[WebSocket] Connection attempt from ${req.socket.remoteAddress}`);
+
+      // Verify authentication
+      try {
+        const url = new URL(req.url || '', `http://${req.headers.host}`);
+        const token = url.searchParams.get('token');
+        
+        // Check if auth is required and verify token
+        if (this.authService.isAuthRequired()) {
+          if (!token) {
+            console.log(`[WebSocket] Rejected connection from ${req.socket.remoteAddress}: Missing token`);
+            ws.close(4001, 'Authentication required');
+            return;
+          }
+
+          const verifyResult = await this.authService.verifyToken(token);
+          if (!verifyResult.valid) {
+            console.log(`[WebSocket] Rejected connection from ${req.socket.remoteAddress}: Invalid token`);
+            ws.close(4003, 'Invalid token');
+            return;
+          }
+        }
+      } catch (error) {
+        console.error('[WebSocket] Error verifying auth:', error);
+        ws.close(4000, 'Internal server error');
+        return;
+      }
+
+      console.log(`[WebSocket] connection authorized from ${req.socket.remoteAddress}`);
       console.log(`[WebSocket] Client connected, total: ${this.clients.size + 1}`);
 
       const clientInfo: ClientInfo = {

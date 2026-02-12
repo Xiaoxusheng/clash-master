@@ -12,6 +12,7 @@ import type { RealtimeStore } from './realtime.js';
 // Import modules
 import { BackendService, backendController } from './modules/backend/index.js';
 import { StatsService, statsController } from './modules/stats/index.js';
+import { AuthService, authController } from './modules/auth/index.js';
 
 // Extend Fastify instance to include services
 declare module 'fastify' {
@@ -43,10 +44,12 @@ export async function createApp(options: AppOptions) {
   // Create services
   const backendService = new BackendService(db, realtimeStore);
   const statsService = new StatsService(db, realtimeStore);
+  const authService = new AuthService(db);
 
   // Decorate Fastify instance with services
   app.decorate('backendService', backendService);
   app.decorate('statsService', statsService);
+  app.decorate('authService', authService);
 
   const getBackendIdFromQuery = (query: Record<string, unknown>): number | null => {
     const backendId = typeof query.backendId === 'string' ? query.backendId : undefined;
@@ -206,9 +209,43 @@ export async function createApp(options: AppOptions) {
     }
   });
 
+  // Auth middleware - protects API routes
+  app.addHook('onRequest', async (request, reply) => {
+    // Skip auth for public routes
+    const publicRoutes = [
+      '/health',
+      '/api/auth/state',
+      '/api/auth/verify',
+    ];
+    
+    // Check if route is public
+    if (publicRoutes.some(route => request.url.startsWith(route))) {
+      return;
+    }
+
+    // Check if auth is required
+    if (!authService.isAuthRequired()) {
+      return;
+    }
+
+    // Get token from header
+    const authHeader = request.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return reply.status(401).send({ error: 'Authentication required' });
+    }
+
+    const token = authHeader.slice(7);
+    const verifyResult = await authService.verifyToken(token);
+    
+    if (!verifyResult.valid) {
+      return reply.status(401).send({ error: verifyResult.message || 'Invalid token' });
+    }
+  });
+
   // Register controllers
   await app.register(backendController, { prefix: '/api/backends' });
   await app.register(statsController, { prefix: '/api/stats' });
+  await app.register(authController, { prefix: '/api/auth' });
 
   // Start server
   await app.listen({ port, host: '0.0.0.0' });

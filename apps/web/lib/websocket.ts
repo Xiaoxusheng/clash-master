@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { StatsSummary } from '@neko-master/shared';
 import type { TimeRange } from '@/lib/api';
+import { getStoredToken } from '@/lib/auth-queries';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
@@ -214,10 +215,16 @@ export function useStatsWebSocket(options: UseStatsWebSocketOptions = {}) {
       wsUrlIndexRef.current = 0;
     }
     const wsUrl = wsUrls[wsUrlIndexRef.current]!;
+    
+    const token = getStoredToken();
+    const urlWithToken = token 
+      ? `${wsUrl}${wsUrl.includes('?') ? '&' : '?'}token=${token}`
+      : wsUrl;
+      
     console.log('[WebSocket] Connecting to:', wsUrl);
 
     try {
-      const ws = new WebSocket(wsUrl);
+      const ws = new WebSocket(urlWithToken);
       wsRef.current = ws;
       let opened = false;
 

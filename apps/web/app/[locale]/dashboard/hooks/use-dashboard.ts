@@ -22,6 +22,7 @@ import {
 } from "@/lib/stats-query-keys";
 import { useStableTimeRange } from "@/lib/hooks/use-stable-time-range";
 import { useStatsWebSocket } from "@/lib/websocket";
+import { useRequireAuth } from "@/lib/auth-queries";
 import type {
   StatsSummary,
   CountryStats,
@@ -115,6 +116,10 @@ export function useDashboard(): UseDashboardReturn {
 
   const stableTimeRange = useStableTimeRange(timeRange);
   const isWsSummaryTab = activeTab === "overview" || activeTab === "countries";
+  
+  // Auth check
+  const { showLogin, isLoading: isAuthLoading } = useRequireAuth();
+  const shouldFetch = !showLogin && !isAuthLoading;
 
   // Backends Query
   const backendsQuery = useQuery({
@@ -122,6 +127,7 @@ export function useDashboard(): UseDashboardReturn {
     queryFn: () => api.getBackends(),
     refetchInterval: autoRefresh ? 5000 : false,
     refetchIntervalInBackground: true,
+    enabled: shouldFetch,
   });
 
   const backends = backendsQuery.data ?? [];
@@ -287,8 +293,14 @@ export function useDashboard(): UseDashboardReturn {
 
   // Open setup dialog automatically when no backend is configured
   useEffect(() => {
+    // Don't open backend dialog if we need to login
+    if (showLogin) return;
+    
     if (backendsQuery.isError) return;
+    // Strictly check if data is present to avoid "empty" state during initial loading/idle
+    if (!backendsQuery.data && !backendsQuery.isSuccess) return;
     if (backendsQuery.isLoading || backendsQuery.isFetching) return;
+    
     if (backends.length === 0) {
       setIsFirstTime(true);
       setShowBackendDialog(true);
@@ -303,6 +315,7 @@ export function useDashboard(): UseDashboardReturn {
     backendsQuery.isFetching,
     backendsQuery.isLoading,
     isFirstTime,
+    showLogin,
   ]);
 
   // Rolling presets: keep the time window moving
