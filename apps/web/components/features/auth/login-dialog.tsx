@@ -84,9 +84,9 @@ export function LoginDialog({ open, onOpenChange, onLogin }: LoginDialogProps) {
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className="flex flex-col items-center justify-center py-14 px-10 space-y-6 bg-background border shadow-lg rounded-xl min-w-[28rem]"
+              className="flex flex-col items-center justify-center py-10 px-6 sm:py-14 sm:px-10 space-y-6 bg-background border shadow-lg rounded-xl w-[90vw] max-w-sm sm:w-auto sm:max-w-none sm:min-w-[28rem]"
             >
-              <div className="relative w-50 h-50">
+              <div className="relative w-40 h-40 sm:w-50 sm:h-50">
                  <Image
                   src={NEKO_WELCOME}
                   alt="Welcome Neko"
@@ -110,14 +110,14 @@ export function LoginDialog({ open, onOpenChange, onLogin }: LoginDialogProps) {
                   >
                     <Check className="w-3.5 h-3.5 stroke-[3]" />
                   </motion.div>
-                  <h3 className="text-2xl font-semibold text-foreground tracking-tight">
+                  <h3 className="text-xl sm:text-2xl font-semibold text-foreground tracking-tight">
                     {t("loginSuccess") || "Welcome back"}
                   </h3>
                 </div>
                 <p className="text-sm text-muted-foreground/75 mt-2 font-medium">
                   {t("redirecting") || "Syncing network statistics..."}
                 </p>
-                <div className="w-64 h-1.5 bg-gray-100 dark:bg-gray-800 rounded-full mt-5 overflow-hidden relative mx-auto">
+                <div className="w-full max-w-[12rem] sm:max-w-none sm:w-64 h-1.5 bg-gray-100 dark:bg-gray-800 rounded-full mt-5 overflow-hidden relative mx-auto">
                     <motion.div 
                         initial={{ width: "0%" }}
                         animate={{ width: "100%" }}
