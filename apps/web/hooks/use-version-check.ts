@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 const GITHUB_PACKAGE_URL =
   "https://raw.githubusercontent.com/foru17/neko-master/refs/heads/main/package.json";
@@ -41,11 +41,16 @@ export function useVersionCheck(currentVersion: string): VersionCheckResult {
   const [hasUpdate, setHasUpdate] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
   const [stars, setStars] = useState<number | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const check = useCallback(async () => {
+    // Abort any in-flight request before starting a new one
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setIsChecking(true);
     try {
-      const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
 
       // Fetch version and stars in parallel
@@ -61,6 +66,9 @@ export function useVersionCheck(currentVersion: string): VersionCheckResult {
       ]);
 
       clearTimeout(timeoutId);
+
+      // Don't update state if aborted (e.g. component unmounted)
+      if (controller.signal.aborted) return;
 
       // Handle version check
       if (pkgRes.status === "fulfilled" && pkgRes.value.ok) {
@@ -81,7 +89,9 @@ export function useVersionCheck(currentVersion: string): VersionCheckResult {
     } catch {
       // Silently fail — network errors, timeouts, CORS issues, etc.
     } finally {
-      setIsChecking(false);
+      if (!controller.signal.aborted) {
+        setIsChecking(false);
+      }
     }
   }, [currentVersion]);
 
@@ -95,6 +105,8 @@ export function useVersionCheck(currentVersion: string): VersionCheckResult {
     return () => {
       clearTimeout(initialTimer);
       clearInterval(interval);
+      // Abort any in-flight request on unmount
+      abortRef.current?.abort();
     };
   }, [check]);
 

@@ -65,26 +65,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // Auth is enabled. Check if we have a valid session.
-      // We can try to hit a protected endpoint or we can assume we are NOT authenticated
-      // until we prove otherwise via some check.
-      
-      // However, we don't have a "am I logged in" endpoint yet.
-      // But `websocket.ts` or other queries will fail if not.
-      
-      // To prevent "Login" screen flash or "Dashboard" flash, we need to know.
-      // As a workaround, let's try to verify with an empty token or check a lightweight protected endpoint.
-      // Actually, let's use a specific check.
-      
-      // The `app.ts` allows public routes.
-      // Let's rely on the fact that if we just logged in, we set `isAuthenticated` to true.
-      // If we refresh, we reset.
-      
-      // We NEED a way to check validity on mount.
-      // Since I didn't add a specific endpoint, I will use `GET /api/db/retention` which is protected
-      // and lightweight.
-      
-      const checkRes = await fetch("/api/db/retention");
+      // Auth is enabled – check if we have a valid session by hitting a
+      // protected, lightweight endpoint.  `/api/backends` is a core endpoint
+      // that will always exist and is protected by the auth middleware.
+      const checkRes = await fetch("/api/backends");
       if (checkRes.ok) {
         setIsAuthenticated(true);
       } else {
@@ -182,12 +166,6 @@ export function useAuth() {
     throw new Error("useAuth must be used within an AuthProvider");
   }
   return context;
-}
-
-// Helper function to get auth headers for API requests
-// Deprecated: Cookies are handled automatically by browser
-export function getAuthHeaders(): Record<string, string> {
-  return {};
 }
 
 // Hook to determine if login dialog should be shown

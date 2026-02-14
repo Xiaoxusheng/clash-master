@@ -6,7 +6,8 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function formatBytes(bytes: number, decimals = 2): string {
-  if (bytes === 0) return "0 B";
+  if (!Number.isFinite(bytes) || bytes === 0) return "0 B";
+  if (bytes < 0) return `-${formatBytes(-bytes, decimals)}`;
 
   const k = 1024;
   const dm = decimals < 0 ? 0 : decimals;
@@ -64,24 +65,4 @@ export function formatDuration(dateString: string): string {
   if (hours > 0) return `${hours}h ago`;
   if (minutes > 0) return `${minutes}m ago`;
   return `${seconds}s ago`;
-}
-
-export function getDomainColor(domain: string): string {
-  const colors = [
-    "#18181b",
-    "#27272a",
-    "#3f3f46",
-    "#52525b",
-    "#71717a",
-    "#a1a1aa",
-    "#d4d4d8",
-    "#e4e4e7",
-  ];
-
-  let hash = 0;
-  for (let i = 0; i < domain.length; i++) {
-    hash = domain.charCodeAt(i) + ((hash << 5) - hash);
-  }
-
-  return colors[Math.abs(hash) % colors.length];
 }

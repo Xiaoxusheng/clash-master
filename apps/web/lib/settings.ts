@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useSyncExternalStore, useMemo } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 export type FaviconProvider = "google" | "faviconim" | "off";
 
@@ -115,20 +115,20 @@ function getServerSnapshot(): UserSettings {
 
 // React hook for settings using useSyncExternalStore for instant sync
 export function useSettings() {
+  // useSyncExternalStore already returns a stable snapshot reference;
+  // it only changes when the subscribe callback fires and getSnapshot
+  // returns a different value (cachedSettings is replaced in saveSettings).
   const settings = useSyncExternalStore(
     subscribe,
     getSnapshot,
     getServerSnapshot
   );
 
-  // Use useMemo to ensure stable reference
-  const stableSettings = useMemo(() => settings, [settings.faviconProvider]);
-
   const setSettings = useCallback((newSettings: Partial<UserSettings>) => {
     saveSettings(newSettings);
   }, []);
 
-  return { settings: stableSettings, setSettings, mounted: true };
+  return { settings, setSettings, mounted: true };
 }
 
 // Generate favicon URL based on provider

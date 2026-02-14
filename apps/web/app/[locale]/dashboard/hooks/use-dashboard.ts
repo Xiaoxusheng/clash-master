@@ -154,7 +154,7 @@ export function useDashboard(): UseDashboardReturn {
     onMessage: useCallback(
       (stats: StatsSummary) => {
         if (!activeBackendId) return;
-        setAutoRefreshTick((tick) => tick + 1);
+        setAutoRefreshTick((tick) => (tick + 1) % 3600);
         queryClient.setQueryData(
           getSummaryQueryKey(activeBackendId, stableTimeRange),
           (previous) => ({
@@ -278,11 +278,11 @@ export function useDashboard(): UseDashboardReturn {
     async (backendId: number) => {
       try {
         await api.setActiveBackend(backendId);
-        await backendsQuery.refetch();
+        const { data: latestBackends } = await backendsQuery.refetch();
         await refreshNow(true);
         
-        // Check backend health after switching
-        const switchedBackend = backends.find(b => b.id === backendId);
+        // Check backend health after switching (use fresh data from refetch)
+        const switchedBackend = latestBackends?.find(b => b.id === backendId);
         if (switchedBackend?.health?.status === 'unhealthy') {
           toast.warning(
             dashboardT("backendUnhealthyTitle"), 
@@ -296,7 +296,7 @@ export function useDashboard(): UseDashboardReturn {
         console.error("Failed to switch backend:", err);
       }
     },
-    [backendsQuery.refetch, refreshNow, backends, backendT]
+    [backendsQuery.refetch, refreshNow, dashboardT]
   );
 
   const handleBackendChange = useCallback(async () => {
@@ -339,7 +339,7 @@ export function useDashboard(): UseDashboardReturn {
     const intervalMs =
       activeTab === "rules" ? 30000 : shouldReducePolling ? 30000 : 5000;
     const interval = setInterval(() => {
-      setAutoRefreshTick((tick) => tick + 1);
+      setAutoRefreshTick((tick) => (tick + 1) % 3600);
       setTimeRange(getPresetTimeRange(timePreset));
     }, intervalMs);
     return () => clearInterval(interval);
@@ -351,7 +351,7 @@ export function useDashboard(): UseDashboardReturn {
       return;
     const intervalMs = 5000;
     const interval = setInterval(() => {
-      setAutoRefreshTick((tick) => tick + 1);
+      setAutoRefreshTick((tick) => (tick + 1) % 3600);
       queryClient.invalidateQueries({ queryKey: ["stats"] });
     }, intervalMs);
     return () => clearInterval(interval);

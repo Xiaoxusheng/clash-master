@@ -1,29 +1,45 @@
 "use client";
 
 import { useRequireAuth, useAuth } from "@/lib/auth";
+import { useQueryClient } from "@tanstack/react-query";
+import { authKeys } from "@/lib/auth-queries";
+import { useTranslations } from "next-intl";
+import { toast } from "sonner";
 import { LoginDialog } from "./login-dialog";
 
 export function AuthGuard() {
   const { showLogin } = useRequireAuth();
   const { login, confirmLogin } = useAuth();
-  
-  const handleLogin = async (token: string) => {
-    const success = await login(token, false);
-    if (success) {
-      setTimeout(() => {
-        confirmLogin();
-      }, 2500);
-      return true;
+  const queryClient = useQueryClient();
+  const t = useTranslations("auth");
+
+  const handleLogin = async (token: string): Promise<boolean> => {
+    try {
+      const success = await login(token, false);
+      if (success) {
+        // Wait for animation to finish (2.5s matches LoginDialog animation)
+        setTimeout(() => {
+          confirmLogin();
+          // Invalidate auth state to trigger re-check
+          queryClient.invalidateQueries({ queryKey: authKeys.state() });
+        }, 2500);
+        return true;
+      } else {
+        toast.error(t("invalidToken"));
+        return false;
+      }
+    } catch {
+      toast.error(t("invalidToken"));
+      return false;
     }
-    return false;
   };
 
   if (!showLogin) return null;
 
   return (
-    <LoginDialog 
-      open={true} 
-      onOpenChange={() => {}} 
+    <LoginDialog
+      open={true}
+      onOpenChange={() => {}}
       onLogin={handleLogin}
     />
   );

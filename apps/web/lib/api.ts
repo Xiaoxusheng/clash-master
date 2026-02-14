@@ -616,9 +616,9 @@ export function formatDateTimeForInput(date: Date): string {
   return date.toISOString().slice(0, 16); // YYYY-MM-DDTHH:mm
 }
 
-export function formatDateTimeDisplay(isoString: string): string {
+export function formatDateTimeDisplay(isoString: string, locale?: string): string {
   const date = new Date(isoString);
-  return date.toLocaleString('zh-CN', {
+  return date.toLocaleString(locale, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',

@@ -88,16 +88,6 @@ export function useLogout() {
   });
 }
 
-// Hook to check if user is authenticated
-// Deprecated: logic moved to AuthProvider
-export function useIsAuthenticated() {
-  const { data: authState, isLoading } = useAuthState();
-  if (isLoading) return { isAuthenticated: false, isLoading: true };
-  if (authState && !authState.enabled) return { isAuthenticated: true, isLoading: false };
-  // We can't know for sure here without context, defaulting to true to avoid UI flicker if not using AuthProvider
-  return { isAuthenticated: true, isLoading: false }; 
-}
-
 // Helper function to get auth headers for API requests
 // Cookies are handled automatically by browser
 export function getAuthHeaders(): Record<string, string> {

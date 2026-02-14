@@ -238,6 +238,7 @@ export function Header({
 
           {/* Listening Indicators */}
           {listeningBackends.length > 0 && (
+            <TooltipProvider delayDuration={100}>
             <div className="hidden md:flex items-center gap-1">
               {listeningBackends.slice(0, 3).map((backend) => {
                 // Determine color based on health status
@@ -257,8 +258,7 @@ export function Header({
                   (status === 'healthy' ? 'Connected' : status === 'unhealthy' ? 'Connection failed' : 'Checking...');
                 
                 return (
-                  <TooltipProvider key={backend.id} delayDuration={100}>
-                    <Tooltip>
+                    <Tooltip key={backend.id}>
                       <TooltipTrigger asChild>
                         <Badge
                           variant="outline"
@@ -285,7 +285,6 @@ export function Header({
                         </div>
                       </TooltipContent>
                     </Tooltip>
-                  </TooltipProvider>
                 );
               })}
               {listeningBackends.length > 3 && (
@@ -294,6 +293,7 @@ export function Header({
                 </Badge>
               )}
             </div>
+            </TooltipProvider>
           )}
         </div>
 
