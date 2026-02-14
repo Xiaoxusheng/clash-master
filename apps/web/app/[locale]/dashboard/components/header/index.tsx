@@ -243,14 +243,14 @@ export function Header({
                 // Determine color based on health status
                 const healthStatus = backend.health?.status;
                 const badgeClasses = {
-                  healthy: "border-green-500/30 text-green-600 bg-green-50/50",
-                  unhealthy: "border-red-500/30 text-red-600 bg-red-50/50",
-                  unknown: "border-gray-500/30 text-gray-500 bg-gray-50/50",
+                  healthy: "border-green-500/30 text-green-600 bg-green-50/50 dark:bg-green-500/15 dark:text-green-400 dark:border-green-500/25",
+                  unhealthy: "border-red-500/30 text-red-600 bg-red-50/50 dark:bg-red-500/15 dark:text-red-400 dark:border-red-500/25",
+                  unknown: "border-gray-500/30 text-gray-500 bg-gray-50/50 dark:bg-gray-500/15 dark:text-gray-400 dark:border-gray-500/25",
                 };
                 const iconClasses = {
-                  healthy: "text-green-500",
-                  unhealthy: "text-red-500",
-                  unknown: "text-gray-400",
+                  healthy: "text-green-500 dark:text-green-400",
+                  unhealthy: "text-red-500 dark:text-red-400",
+                  unknown: "text-gray-400 dark:text-gray-500",
                 };
                 const status = healthStatus || 'unknown';
                 const tooltipText = backend.health?.message || 
