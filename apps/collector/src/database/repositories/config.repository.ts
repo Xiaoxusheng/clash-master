@@ -88,6 +88,8 @@ export class ConfigRepository extends BaseRepository {
         deletedLogs = minuteResult.changes;
         this.db.prepare(`DELETE FROM minute_dim_stats WHERE backend_id = ?`).run(backendId);
         this.db.prepare(`DELETE FROM minute_country_stats WHERE backend_id = ?`).run(backendId);
+        this.db.prepare(`DELETE FROM hourly_dim_stats WHERE backend_id = ?`).run(backendId);
+        this.db.prepare(`DELETE FROM hourly_country_stats WHERE backend_id = ?`).run(backendId);
         this.db.prepare(`DELETE FROM connection_logs WHERE backend_id = ?`).run(backendId);
 
         deletedDomains = this.db.prepare(`DELETE FROM domain_stats WHERE backend_id = ?`).run(backendId).changes;
@@ -109,11 +111,14 @@ export class ConfigRepository extends BaseRepository {
       } else {
         const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
         const minuteCutoff = cutoff.toISOString().slice(0, 16) + ':00';
+        const hourCutoff = cutoff.toISOString().slice(0, 13) + ':00:00';
         const minuteResult = this.db.prepare(`DELETE FROM minute_stats WHERE backend_id = ? AND minute < ?`).run(backendId, minuteCutoff);
         deletedConnections = minuteResult.changes;
         deletedLogs = minuteResult.changes;
         this.db.prepare(`DELETE FROM minute_dim_stats WHERE backend_id = ? AND minute < ?`).run(backendId, minuteCutoff);
         this.db.prepare(`DELETE FROM minute_country_stats WHERE backend_id = ? AND minute < ?`).run(backendId, minuteCutoff);
+        this.db.prepare(`DELETE FROM hourly_dim_stats WHERE backend_id = ? AND hour < ?`).run(backendId, hourCutoff);
+        this.db.prepare(`DELETE FROM hourly_country_stats WHERE backend_id = ? AND hour < ?`).run(backendId, hourCutoff);
         this.db.prepare(`DELETE FROM connection_logs WHERE backend_id = ? AND timestamp < ?`).run(backendId, cutoff.toISOString());
       }
     } else {
@@ -123,6 +128,8 @@ export class ConfigRepository extends BaseRepository {
         deletedLogs = minuteResult.changes;
         this.db.prepare(`DELETE FROM minute_dim_stats`).run();
         this.db.prepare(`DELETE FROM minute_country_stats`).run();
+        this.db.prepare(`DELETE FROM hourly_dim_stats`).run();
+        this.db.prepare(`DELETE FROM hourly_country_stats`).run();
         this.db.prepare(`DELETE FROM connection_logs`).run();
 
         deletedDomains = this.db.prepare(`DELETE FROM domain_stats`).run().changes;
@@ -144,11 +151,14 @@ export class ConfigRepository extends BaseRepository {
       } else {
         const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
         const minuteCutoff = cutoff.toISOString().slice(0, 16) + ':00';
+        const hourCutoff = cutoff.toISOString().slice(0, 13) + ':00:00';
         const minuteResult = this.db.prepare(`DELETE FROM minute_stats WHERE minute < ?`).run(minuteCutoff);
         deletedConnections = minuteResult.changes;
         deletedLogs = minuteResult.changes;
         this.db.prepare(`DELETE FROM minute_dim_stats WHERE minute < ?`).run(minuteCutoff);
         this.db.prepare(`DELETE FROM minute_country_stats WHERE minute < ?`).run(minuteCutoff);
+        this.db.prepare(`DELETE FROM hourly_dim_stats WHERE hour < ?`).run(hourCutoff);
+        this.db.prepare(`DELETE FROM hourly_country_stats WHERE hour < ?`).run(hourCutoff);
         this.db.prepare(`DELETE FROM connection_logs WHERE timestamp < ?`).run(cutoff.toISOString());
       }
     }
@@ -190,6 +200,10 @@ export class ConfigRepository extends BaseRepository {
     this.db.prepare(`DELETE FROM minute_dim_stats WHERE minute < ?`).run(minuteCutoff);
     this.db.prepare(`DELETE FROM minute_country_stats WHERE minute < ?`).run(minuteCutoff);
     this.db.prepare(`DELETE FROM connection_logs WHERE timestamp < ?`).run(cutoff);
+    // Also clean hourly_dim_stats and hourly_country_stats using the same cutoff (hour granularity)
+    const hourCutoff = cutoff.slice(0, 13) + ':00:00';
+    this.db.prepare(`DELETE FROM hourly_dim_stats WHERE hour < ?`).run(hourCutoff);
+    this.db.prepare(`DELETE FROM hourly_country_stats WHERE hour < ?`).run(hourCutoff);
     return this.db.prepare(`DELETE FROM minute_stats WHERE minute < ?`).run(minuteCutoff).changes;
   }
 

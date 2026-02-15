@@ -5,7 +5,8 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import { Server, Link2 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatBytes, formatNumber } from "@/lib/utils";
+import { formatBytes, formatNumber, cn } from "@/lib/utils";
+import { useIsWindows } from "@/lib/hooks/use-is-windows";
 import type { ProxyStats } from "@neko-master/shared";
 
 interface ProxyStatsChartProps {
@@ -38,6 +39,7 @@ function formatProxyName(name: string): string {
 
 export function ProxyStatsChart({ data }: ProxyStatsChartProps) {
   const t = useTranslations("proxies");
+  const isWindows = useIsWindows();
 
   const chartData = useMemo(() => {
     if (!data) return [];
@@ -61,7 +63,7 @@ export function ProxyStatsChart({ data }: ProxyStatsChartProps) {
       const item = payload[0].payload;
       return (
         <div className="glass-card p-3 rounded-lg border shadow-lg">
-          <p className="font-medium text-sm mb-2">{item.name}</p>
+          <p className={cn("font-medium text-sm mb-2", isWindows && "emoji-flag-font")}>{item.name}</p>
           <div className="space-y-1 text-xs">
             <div className="flex justify-between gap-4">
               <span className="text-muted-foreground">{t("total")}:</span>
@@ -132,7 +134,7 @@ export function ProxyStatsChart({ data }: ProxyStatsChartProps) {
                     className="w-3 h-3 rounded-full shrink-0"
                     style={{ backgroundColor: item.color }}
                   />
-                  <p className="font-medium text-sm truncate" title={item.name}>
+                  <p className={cn("font-medium text-sm truncate", isWindows && "emoji-flag-font")} title={item.name}>
                     {item.name}
                   </p>
                 </div>

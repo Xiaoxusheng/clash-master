@@ -38,6 +38,7 @@ import { Favicon } from "@/components/common/favicon";
 import { DomainPreview } from "@/components/features/domains/domain-preview";
 import { ProxyChainBadge } from "@/components/features/proxies/proxy-chain-badge";
 import { DomainExpandedDetails, IPExpandedDetails } from "@/components/features/stats/table/expanded-details";
+import { useIsWindows } from "@/lib/hooks/use-is-windows";
 import { ExpandReveal } from "@/components/ui/expand-reveal";
 import { UnifiedRuleChainFlow } from "@/components/features/rules/rule-chain-flow";
 import { InsightChartSkeleton, InsightDetailSectionSkeleton, InsightTableSkeleton, InsightThreePanelSkeleton } from "@/components/ui/insight-skeleton";
@@ -172,6 +173,7 @@ export function InteractiveRuleStats({
   const queryClient = useQueryClient();
   const stableTimeRange = useStableTimeRange(timeRange, { roundToMinute: true });
   const detailTimeRange = stableTimeRange;
+  const isWindows = useIsWindows();
 
   const { data: listData, isLoading: listQueryLoading } = useRules({
     activeBackendId,
@@ -700,7 +702,7 @@ export function InteractiveRuleStats({
                         {idx + 1}
                       </span>
                       <span
-                        className="px-1.5 py-0.5 rounded-md text-[10px] font-medium text-white/90 truncate min-w-0"
+                        className={cn("px-1.5 py-0.5 rounded-md text-[10px] font-medium text-white/90 truncate min-w-0", isWindows && "emoji-flag-font")}
                         style={{ backgroundColor: item.color }}
                       >
                         {item.name}
@@ -765,7 +767,7 @@ export function InteractiveRuleStats({
                         </span>
 
                         <span 
-                          className="flex-1 text-sm font-medium truncate min-w-0" 
+                          className={cn("flex-1 text-sm font-medium truncate min-w-0", isWindows && "emoji-flag-font")} 
                           title={item.name}
                         >
                           {item.name}
@@ -818,7 +820,7 @@ export function InteractiveRuleStats({
                         )}>
                           {noTraffic ? "–" : item.rank + 1}
                         </span>
-                        <span className="flex-1 text-sm font-medium line-clamp-2 leading-tight" title={item.name}>
+                        <span className={cn("flex-1 text-sm font-medium line-clamp-2 leading-tight", isWindows && "emoji-flag-font")} title={item.name}>
                           {item.name}
                         </span>
                       </div>
@@ -884,7 +886,7 @@ export function InteractiveRuleStats({
                 {t("topDomains")}
               </CardTitle>
               {selectedRuleData && (
-                <span className="text-xs text-muted-foreground">
+                <span className={cn("text-xs text-muted-foreground", isWindows && "emoji-flag-font")}>
                   {selectedRuleData.name}
                 </span>
               )}

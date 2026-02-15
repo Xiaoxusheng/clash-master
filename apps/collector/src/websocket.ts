@@ -119,6 +119,7 @@ export class StatsWebSocketServer {
     ts: number;
   }>();
   private static BASE_SUMMARY_CACHE_TTL_MS = 2000;
+  private static BASE_SUMMARY_CACHE_TTL_HISTORICAL_MS = 300000; // 5 minutes for historical ranges
 
   constructor(port: number, db: StatsDatabase) {
     this.port = port;
@@ -644,6 +645,17 @@ export class StatsWebSocketServer {
     };
   }
 
+  private getBaseSummaryCacheTTL(range: ClientRange): number {
+    if (!range.end) return StatsWebSocketServer.BASE_SUMMARY_CACHE_TTL_MS;
+    const endMs = new Date(range.end).getTime();
+    if (Number.isNaN(endMs)) return StatsWebSocketServer.BASE_SUMMARY_CACHE_TTL_MS;
+    const toleranceMs = parseInt(process.env.REALTIME_RANGE_END_TOLERANCE_MS || '120000', 10);
+    const windowMs = Number.isFinite(toleranceMs) ? Math.max(10_000, toleranceMs) : 120_000;
+    return endMs >= Date.now() - windowMs
+      ? StatsWebSocketServer.BASE_SUMMARY_CACHE_TTL_MS
+      : StatsWebSocketServer.BASE_SUMMARY_CACHE_TTL_HISTORICAL_MS;
+  }
+
   private resolveBackendId(rawBackendId: number | null): number | null {
     if (rawBackendId !== null) {
       return this.db.getBackend(rawBackendId) ? rawBackendId : null;
@@ -679,11 +691,13 @@ export class StatsWebSocketServer {
       !domainsPage &&
       !ipsPage;
 
+    const cacheTTL = this.getBaseSummaryCacheTTL(range);
+
     const summary = wantsFullSummary
       ? (() => {
           const baseCacheKey = `${resolvedBackendId}|${range.start || ''}|${range.end || ''}`;
           const cached = this.baseSummaryCache.get(baseCacheKey);
-          if (cached && Date.now() - cached.ts < StatsWebSocketServer.BASE_SUMMARY_CACHE_TTL_MS) {
+          if (cached && Date.now() - cached.ts < cacheTTL) {
             return cached.summary;
           }
           const result = this.db.getSummary(resolvedBackendId, range.start, range.end);
@@ -700,10 +714,10 @@ export class StatsWebSocketServer {
     // Use cached base summary data to avoid repeated expensive DB queries
     const baseCacheKey = `${resolvedBackendId}|${range.start || ''}|${range.end || ''}`;
     const baseCached = this.baseSummaryCache.get(baseCacheKey);
-    const baseCacheValid = baseCached && Date.now() - baseCached.ts < StatsWebSocketServer.BASE_SUMMARY_CACHE_TTL_MS;
+    const baseCacheValid = baseCached && Date.now() - baseCached.ts < cacheTTL;
 
     const dbTopDomains = wantsFullSummary
-      ? (baseCacheValid ? baseCached!.topDomains : this.db.getTopDomains(resolvedBackendId, 100, range.start, range.end))
+      ? (baseCacheValid ? baseCached!.topDomains : this.db.getTopDomainsLight(resolvedBackendId, 100, range.start, range.end))
       : undefined;
     const topDomains = wantsFullSummary && dbTopDomains
       ? includeRealtime
@@ -712,7 +726,7 @@ export class StatsWebSocketServer {
       : [];
 
     const dbTopIPs = wantsFullSummary
-      ? (baseCacheValid ? baseCached!.topIPs : this.db.getTopIPs(resolvedBackendId, 100, range.start, range.end))
+      ? (baseCacheValid ? baseCached!.topIPs : this.db.getTopIPsLight(resolvedBackendId, 100, range.start, range.end))
       : undefined;
     const topIPs = wantsFullSummary && dbTopIPs
       ? includeRealtime
@@ -774,7 +788,7 @@ export class StatsWebSocketServer {
       });
       // Evict stale entries
       for (const [key, val] of this.baseSummaryCache) {
-        if (Date.now() - val.ts > StatsWebSocketServer.BASE_SUMMARY_CACHE_TTL_MS * 2) {
+        if (Date.now() - val.ts > cacheTTL * 2) {
           this.baseSummaryCache.delete(key);
         }
       }

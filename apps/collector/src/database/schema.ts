@@ -243,6 +243,40 @@ export const SCHEMA = {
     );
   `,
 
+  // Hourly-level fact table for efficient long-range queries (>2h)
+  HOURLY_DIM_STATS: `
+    CREATE TABLE IF NOT EXISTS hourly_dim_stats (
+      backend_id INTEGER NOT NULL,
+      hour TEXT NOT NULL,
+      domain TEXT NOT NULL DEFAULT '',
+      ip TEXT NOT NULL DEFAULT '',
+      source_ip TEXT NOT NULL DEFAULT '',
+      chain TEXT NOT NULL,
+      rule TEXT NOT NULL,
+      upload INTEGER DEFAULT 0,
+      download INTEGER DEFAULT 0,
+      connections INTEGER DEFAULT 0,
+      PRIMARY KEY (backend_id, hour, domain, ip, source_ip, chain, rule),
+      FOREIGN KEY (backend_id) REFERENCES backend_configs(id) ON DELETE CASCADE
+    );
+  `,
+
+  // Hourly-level country facts for efficient long-range queries
+  HOURLY_COUNTRY_STATS: `
+    CREATE TABLE IF NOT EXISTS hourly_country_stats (
+      backend_id INTEGER NOT NULL,
+      hour TEXT NOT NULL,
+      country TEXT NOT NULL,
+      country_name TEXT,
+      continent TEXT,
+      upload INTEGER DEFAULT 0,
+      download INTEGER DEFAULT 0,
+      connections INTEGER DEFAULT 0,
+      PRIMARY KEY (backend_id, hour, country),
+      FOREIGN KEY (backend_id) REFERENCES backend_configs(id) ON DELETE CASCADE
+    );
+  `,
+
   // Domain×proxy traffic aggregation
   DOMAIN_PROXY_STATS: `
     CREATE TABLE IF NOT EXISTS domain_proxy_stats (
@@ -406,6 +440,15 @@ export const INDEXES = [
   `CREATE INDEX IF NOT EXISTS idx_minute_dim_backend_minute_source ON minute_dim_stats(backend_id, minute, source_ip);`,
   `CREATE INDEX IF NOT EXISTS idx_minute_country_backend_minute ON minute_country_stats(backend_id, minute);`,
 
+  // Hourly dim stats indexes
+  `CREATE INDEX IF NOT EXISTS idx_hourly_dim_backend_hour ON hourly_dim_stats(backend_id, hour);`,
+  `CREATE INDEX IF NOT EXISTS idx_hourly_dim_backend_hour_domain ON hourly_dim_stats(backend_id, hour, domain);`,
+  `CREATE INDEX IF NOT EXISTS idx_hourly_dim_backend_hour_ip ON hourly_dim_stats(backend_id, hour, ip);`,
+  `CREATE INDEX IF NOT EXISTS idx_hourly_dim_backend_hour_chain ON hourly_dim_stats(backend_id, hour, chain);`,
+  `CREATE INDEX IF NOT EXISTS idx_hourly_dim_backend_hour_rule ON hourly_dim_stats(backend_id, hour, rule);`,
+  `CREATE INDEX IF NOT EXISTS idx_hourly_dim_backend_hour_source ON hourly_dim_stats(backend_id, hour, source_ip);`,
+  `CREATE INDEX IF NOT EXISTS idx_hourly_country_backend_hour ON hourly_country_stats(backend_id, hour);`,
+
   // Connection logs indexes
   `CREATE INDEX IF NOT EXISTS idx_connection_logs_backend ON connection_logs(backend_id);`,
   `CREATE INDEX IF NOT EXISTS idx_connection_logs_timestamp ON connection_logs(timestamp);`,
@@ -454,6 +497,8 @@ export function getAllSchemaStatements(): string[] {
     SCHEMA.MINUTE_STATS,
     SCHEMA.MINUTE_DIM_STATS,
     SCHEMA.MINUTE_COUNTRY_STATS,
+    SCHEMA.HOURLY_DIM_STATS,
+    SCHEMA.HOURLY_COUNTRY_STATS,
     SCHEMA.DOMAIN_PROXY_STATS,
     SCHEMA.IP_PROXY_STATS,
     SCHEMA.RULE_CHAIN_TRAFFIC,

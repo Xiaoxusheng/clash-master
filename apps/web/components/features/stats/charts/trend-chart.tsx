@@ -17,7 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn, formatBytes } from "@/lib/utils";
 import type { TrafficTrendPoint } from "@neko-master/shared";
 
-type TimeRange = "30m" | "1h" | "24h";
+type TimeRange = "30m" | "1h" | "24h" | "today";
 type TrendGranularity = "minute" | "day";
 
 interface TrafficTrendChartProps {
@@ -54,6 +54,7 @@ export const TrafficTrendChart = React.memo(
         { value: "30m", label: t("30m") },
         { value: "1h", label: t("1h") },
         { value: "24h", label: t("24h") },
+        { value: "today", label: t("today") },
       ];
       return allOptions.filter((item) => timeRangeOptions.includes(item.value));
     }, [t, timeRangeOptions]);

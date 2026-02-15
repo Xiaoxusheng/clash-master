@@ -7,6 +7,47 @@
 
 ## [未发布]
 
+## [1.2.8] - 2026-02-15
+
+### 性能优化
+
+- **查询性能大幅提升（最高 60x）** 🚀
+  - 新增 `hourly_dim_stats` / `hourly_country_stats` 预聚合表，写入时实时维护
+  - 所有维度表查询（domain/ip/proxy/rule/device/country）在 > 6h 范围时自动路由到小时级预聚合表
+  - 时序查询优化：`getHourlyStats`、`getTrafficInRange`、`getTrafficTrend`、`getTrafficTrendAggregated` 在长范围查询时直接读取 `hourly_stats`，避免扫描 `minute_stats` 并重新聚合
+  - 7 天范围查询扫描行数从 ~10,080 行降至 ~168 行
+  - 每次 WebSocket broadcast 总扫描行数从 ~20,160 行降至 ~336 行
+- **`resolveFactTableSplit` 混合查询策略**：长范围查询拆分为 hourly（已完成小时）+ minute（当前小时尾部），兼顾性能与精度
+
+### 新增
+
+- **测试基础设施** 🧪
+  - 引入 Vitest 测试框架，新增 `traffic-writer`、`auth.service`、`stats.service` 单元测试
+  - 新增测试辅助工具 `helpers.ts`
+  - 新增 ESLint 配置和 `.env.example`
+- **时间范围选择器增强**
+  - 新增「1 小时」快捷预设，替代默认的 30 分钟视图
+  - 趋势图新增「今天」快捷选项，从午夜到当前时间
+  - 30 分钟预设移至调试模式的短预设列表
+- **`BatchBuffer` 模块**：独立的批量缓冲处理模块，从 collector 中解耦
+
+### 修复
+
+- **Cookie 认证安全性**：将 `secure` 标志从 `process.env.NODE_ENV === 'production'` 改为 `request.protocol === 'https'`，修复 HTTP 内网环境下无法设置 Cookie 导致登录循环的问题
+- **Windows 平台 emoji 国旗显示**：为 proxy 相关组件（列表、图表、Grid、交互式统计、规则统计）添加 `emoji-flag-font` 样式类，修复 Windows 下国旗 emoji 显示异常
+
+### 重构
+
+- **全局 AuthGuard 重构**：将认证逻辑从 dashboard layout 提取为独立的 `AuthGuard` 组件，简化 `auth.tsx` 和 `auth-queries.ts`
+- **Collector 服务拆分**：`collector.ts` 和 `surge-collector.ts` 大幅瘦身，提取 `BatchBuffer` 和 `RealtimeStore` 模块
+- 移除旧的 `api.ts` 入口文件，统一使用模块化控制器
+
+### 技术细节
+
+- `hourly_dim_stats` 表结构：`(backend_id, hour, dimension, dim_key, upload, download, connections)`，写入时通过 `INSERT ... ON CONFLICT DO UPDATE` 实时更新
+- `resolveFactTable` / `resolveFactTableSplit` 方法在 `BaseRepository` 中实现，所有 Repository 共享
+- 时序查询阈值：`getTrafficInRange`/`getTrafficTrend` 在 > 6h 时切换到 `hourly_stats`；`getTrafficTrendAggregated` 在 `bucketMinutes >= 60` 时切换
+
 ## [1.2.7] - 2026-02-14
 
 ### 新增

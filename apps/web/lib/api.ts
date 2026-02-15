@@ -573,37 +573,60 @@ export const api = {
 
 // Helper functions for time range
 export function getPresetTimeRange(
-  preset: "1m" | "5m" | "15m" | "30m" | "7d" | "30d" | "24h" | "today",
+  preset: "1m" | "5m" | "15m" | "30m" | "1h" | "7d" | "30d" | "24h" | "today",
 ): TimeRange {
-  const end = new Date();
+  const now = new Date();
+  const end = new Date(now);
   end.setMilliseconds(0);
-  const start = new Date(end);
+  
+  // Helper to get start of today in local time
+  const getStartOfToday = () => {
+    const d = new Date(now);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  };
+  
+  let start: Date;
   
   switch (preset) {
     case "1m":
+      start = new Date(end);
       start.setMinutes(start.getMinutes() - 1);
       break;
     case "5m":
+      start = new Date(end);
       start.setMinutes(start.getMinutes() - 5);
       break;
     case "15m":
+      start = new Date(end);
       start.setMinutes(start.getMinutes() - 15);
       break;
     case "30m":
+      start = new Date(end);
       start.setMinutes(start.getMinutes() - 30);
       break;
+    case "1h":
+      start = new Date(end);
+      start.setHours(start.getHours() - 1);
+      break;
     case '7d':
+      start = new Date(end);
       start.setDate(start.getDate() - 7);
       break;
     case '30d':
+      start = new Date(end);
       start.setDate(start.getDate() - 30);
       break;
     case '24h':
+      start = new Date(end);
       start.setHours(start.getHours() - 24);
       break;
     case 'today':
-      start.setHours(0, 0, 0, 0);
+      start = getStartOfToday();
       break;
+    default:
+      start = new Date(end);
+      start.setHours(start.getHours() - 24);
   }
   
   return {

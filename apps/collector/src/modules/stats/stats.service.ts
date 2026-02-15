@@ -105,12 +105,12 @@ export class StatsService {
       ? this.realtimeStore.applySummaryDelta(backendId, summary)
       : summary;
 
-    const dbTopDomains = this.db.getTopDomains(backendId, 10, timeRange.start, timeRange.end);
+    const dbTopDomains = this.db.getTopDomainsLight(backendId, 10, timeRange.start, timeRange.end);
     const topDomains = includeRealtime
       ? this.realtimeStore.mergeTopDomains(backendId, dbTopDomains, 10)
       : dbTopDomains;
 
-    const dbTopIPs = this.db.getTopIPs(backendId, 10, timeRange.start, timeRange.end);
+    const dbTopIPs = this.db.getTopIPsLight(backendId, 10, timeRange.start, timeRange.end);
     const topIPs = includeRealtime
       ? this.realtimeStore.mergeTopIPs(backendId, dbTopIPs, 10)
       : dbTopIPs;

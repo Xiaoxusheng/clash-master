@@ -7,7 +7,8 @@ import { CountryFlag, extractCountryCodeFromText, stripLeadingFlagEmoji } from "
 import { OverviewCard } from "@/components/common";
 import { TopListItem } from "@/components/common";
 import { Button } from "@/components/ui/button";
-import { formatBytes, formatNumber } from "@/lib/utils";
+import { formatBytes, formatNumber, cn } from "@/lib/utils";
+import { useIsWindows } from "@/lib/hooks/use-is-windows";
 import type { ProxyStats } from "@neko-master/shared";
 
 interface ProxyTopListProps {
@@ -49,6 +50,7 @@ export function ProxyTopList({ data, limit = 5, onViewAll }: ProxyTopListProps) 
   const [sortBy, setSortBy] = useState<SortBy>("traffic");
   const t = useTranslations("topProxies");
   const proxiesT = useTranslations("proxies");
+  const isWindows = useIsWindows();
 
   const { proxies, totalTraffic, totalConnections } = useMemo(() => {
     if (!data) return { proxies: [], totalTraffic: 0, totalConnections: 0 };
@@ -123,6 +125,7 @@ export function ProxyTopList({ data, limit = 5, onViewAll }: ProxyTopListProps) 
             rank={index + 1}
             icon={<CountryFlag country={proxy.countryCode} className="h-4 w-6" />}
             title={proxy.displayName}
+            titleClassName={cn(isWindows && "emoji-flag-font")}
             subtitle={sortBy === "traffic" 
               ? `${formatNumber(proxy.totalConnections)} ${proxiesT("connections")}` 
               : `${formatBytes(proxy.total)}`

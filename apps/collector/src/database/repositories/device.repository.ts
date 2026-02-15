@@ -15,16 +15,17 @@ export class DeviceRepository extends BaseRepository {
   getDevices(backendId: number, limit = 50, start?: string, end?: string): DeviceStats[] {
     const range = this.parseMinuteRange(start, end);
     if (range) {
+      const resolved = this.resolveFactTable(start!, end!);
       const stmt = this.db.prepare(`
         SELECT source_ip as sourceIP, SUM(upload) as totalUpload, SUM(download) as totalDownload,
-               SUM(connections) as totalConnections, MAX(minute) as lastSeen
-        FROM minute_dim_stats
-        WHERE backend_id = ? AND minute >= ? AND minute <= ? AND source_ip != ''
+               SUM(connections) as totalConnections, MAX(${resolved.timeCol}) as lastSeen
+        FROM ${resolved.table}
+        WHERE backend_id = ? AND ${resolved.timeCol} >= ? AND ${resolved.timeCol} <= ? AND source_ip != ''
         GROUP BY source_ip
         ORDER BY (SUM(upload) + SUM(download)) DESC
         LIMIT ?
       `);
-      return stmt.all(backendId, range.startMinute, range.endMinute, limit) as DeviceStats[];
+      return stmt.all(backendId, resolved.startKey, resolved.endKey, limit) as DeviceStats[];
     }
 
     const stmt = this.db.prepare(`
@@ -40,15 +41,16 @@ export class DeviceRepository extends BaseRepository {
   getDeviceDomains(backendId: number, sourceIP: string, limit = 5000, start?: string, end?: string): DomainStats[] {
     const range = this.parseMinuteRange(start, end);
     if (range) {
+      const resolved = this.resolveFactTable(start!, end!);
       const stmt = this.db.prepare(`
         SELECT domain, SUM(upload) as totalUpload, SUM(download) as totalDownload,
-               SUM(connections) as totalConnections, MAX(minute) as lastSeen,
+               SUM(connections) as totalConnections, MAX(${resolved.timeCol}) as lastSeen,
                GROUP_CONCAT(DISTINCT ip) as ips, GROUP_CONCAT(DISTINCT rule) as rules, GROUP_CONCAT(DISTINCT chain) as chains
-        FROM minute_dim_stats
-        WHERE backend_id = ? AND minute >= ? AND minute <= ? AND source_ip = ? AND domain != ''
+        FROM ${resolved.table}
+        WHERE backend_id = ? AND ${resolved.timeCol} >= ? AND ${resolved.timeCol} <= ? AND source_ip = ? AND domain != ''
         GROUP BY domain ORDER BY (SUM(upload) + SUM(download)) DESC LIMIT ?
       `);
-      const rows = stmt.all(backendId, range.startMinute, range.endMinute, sourceIP, limit) as Array<{
+      const rows = stmt.all(backendId, resolved.startKey, resolved.endKey, sourceIP, limit) as Array<{
         domain: string; totalUpload: number; totalDownload: number; totalConnections: number; lastSeen: string;
         ips: string | null; rules: string | null; chains: string | null;
       }>;
@@ -74,21 +76,22 @@ export class DeviceRepository extends BaseRepository {
   getDeviceIPs(backendId: number, sourceIP: string, limit = 5000, start?: string, end?: string): IPStats[] {
     const range = this.parseMinuteRange(start, end);
     if (range) {
+      const resolved = this.resolveFactTable(start!, end!);
       const stmt = this.db.prepare(`
         SELECT m.ip, SUM(m.upload) as totalUpload, SUM(m.download) as totalDownload,
-               SUM(m.connections) as totalConnections, MAX(m.minute) as lastSeen,
+               SUM(m.connections) as totalConnections, MAX(m.${resolved.timeCol}) as lastSeen,
                GROUP_CONCAT(DISTINCT CASE WHEN m.domain != '' THEN m.domain END) as domains,
                COALESCE(i.asn, g.asn) as asn,
                CASE WHEN g.country IS NOT NULL THEN json_array(g.country, COALESCE(g.country_name, g.country), COALESCE(g.city, ''), COALESCE(g.as_name, ''))
                     WHEN i.geoip IS NOT NULL THEN json(i.geoip) ELSE NULL END as geoIP,
                GROUP_CONCAT(DISTINCT m.chain) as chains, GROUP_CONCAT(DISTINCT m.rule) as rules
-        FROM minute_dim_stats m
+        FROM ${resolved.table} m
         LEFT JOIN ip_stats i ON m.backend_id = i.backend_id AND m.ip = i.ip
         LEFT JOIN geoip_cache g ON m.ip = g.ip
-        WHERE m.backend_id = ? AND m.minute >= ? AND m.minute <= ? AND m.source_ip = ? AND m.ip != ''
+        WHERE m.backend_id = ? AND m.${resolved.timeCol} >= ? AND m.${resolved.timeCol} <= ? AND m.source_ip = ? AND m.ip != ''
         GROUP BY m.ip ORDER BY (SUM(m.upload) + SUM(m.download)) DESC LIMIT ?
       `);
-      const rows = stmt.all(backendId, range.startMinute, range.endMinute, sourceIP, limit) as Array<{
+      const rows = stmt.all(backendId, resolved.startKey, resolved.endKey, sourceIP, limit) as Array<{
         ip: string; totalUpload: number; totalDownload: number; totalConnections: number; lastSeen: string;
         domains: string | null; asn: string | null; geoIP: string | null; chains: string | null; rules: string | null;
       }>;

@@ -50,6 +50,7 @@ export class StatsDatabase {
 
   // Cached prepared statements for getSummary() — avoids re-compilation per call
   private _summaryStmts: ReturnType<StatsDatabase['prepareSummaryStmts']> | null = null;
+  private rangeQueryCache = new Map<string, { value: unknown; expiresAt: number }>();
 
   public readonly repos: {
     auth: AuthRepository;
@@ -93,7 +94,7 @@ export class StatsDatabase {
     this.db.pragma('synchronous = NORMAL');
     this.db.pragma('wal_autocheckpoint = 1000');
     this.db.pragma('temp_store = MEMORY');
-    this.db.pragma('cache_size = -16000');     // 16MB page cache
+    this.db.pragma('cache_size = -65536');     // 64MB page cache
     this.db.pragma('busy_timeout = 5000');
 
     // Apply all schema statements from the single source of truth
@@ -111,6 +112,9 @@ export class StatsDatabase {
 
     // Migrate existing data if needed (from single-backend schema)
     this.migrateIfNeeded();
+
+    // Backfill hourly tables from minute data (one-time)
+    this.backfillHourlyTables();
   }
 
   // Migrate from old single-backend schema to multi-backend schema
@@ -236,6 +240,55 @@ export class StatsDatabase {
     } catch (error) {
       this.db.exec(`ROLLBACK`);
       console.error('[DB] Migration to aggregation tables failed:', error);
+    }
+  }
+
+  /**
+   * One-time backfill: populate hourly_dim_stats and hourly_country_stats
+   * from existing minute_dim_stats and minute_country_stats data.
+   */
+  private backfillHourlyTables() {
+    const hourlyDimCount = (this.db.prepare(`SELECT COUNT(*) as c FROM hourly_dim_stats`).get() as { c: number }).c;
+    const minuteDimCount = (this.db.prepare(`SELECT COUNT(*) as c FROM minute_dim_stats`).get() as { c: number }).c;
+
+    if (hourlyDimCount > 0 || minuteDimCount === 0) return;
+
+    console.log(`[DB] Backfilling hourly tables from ${minuteDimCount} minute_dim_stats rows...`);
+
+    try {
+      this.db.exec(`BEGIN TRANSACTION`);
+
+      // Backfill hourly_dim_stats from minute_dim_stats
+      this.db.exec(`
+        INSERT INTO hourly_dim_stats (backend_id, hour, domain, ip, source_ip, chain, rule, upload, download, connections)
+        SELECT backend_id,
+               SUBSTR(minute, 1, 13) || ':00:00' as hour,
+               domain, ip, source_ip, chain, rule,
+               SUM(upload), SUM(download), SUM(connections)
+        FROM minute_dim_stats
+        GROUP BY backend_id, SUBSTR(minute, 1, 13), domain, ip, source_ip, chain, rule
+      `);
+
+      // Backfill hourly_country_stats from minute_country_stats
+      const minuteCountryCount = (this.db.prepare(`SELECT COUNT(*) as c FROM minute_country_stats`).get() as { c: number }).c;
+      if (minuteCountryCount > 0) {
+        this.db.exec(`
+          INSERT INTO hourly_country_stats (backend_id, hour, country, country_name, continent, upload, download, connections)
+          SELECT backend_id,
+                 SUBSTR(minute, 1, 13) || ':00:00' as hour,
+                 country, MAX(country_name), MAX(continent),
+                 SUM(upload), SUM(download), SUM(connections)
+          FROM minute_country_stats
+          GROUP BY backend_id, SUBSTR(minute, 1, 13), country
+        `);
+      }
+
+      this.db.exec(`COMMIT`);
+      const hourlyRows = (this.db.prepare(`SELECT COUNT(*) as c FROM hourly_dim_stats`).get() as { c: number }).c;
+      console.log(`[DB] Backfill complete: ${hourlyRows} hourly_dim_stats rows created`);
+    } catch (error) {
+      this.db.exec(`ROLLBACK`);
+      console.error('[DB] Hourly backfill failed:', error);
     }
   }
 
@@ -456,19 +509,83 @@ export class StatsDatabase {
 
   // ==================== Domain ====================
   getDomainByName(backendId: number, domain: string) { return this.repos.domain.getDomainByName(backendId, domain); }
-  getDomainStats(backendId: number, limit = 100, start?: string, end?: string) { return this.repos.domain.getDomainStats(backendId, limit, start, end); }
-  getTopDomains(backendId: number, limit = 10, start?: string, end?: string) { return this.repos.domain.getTopDomains(backendId, limit, start, end); }
-  getDomainStatsPaginated(backendId: number, opts: { offset?: number; limit?: number; sortBy?: string; sortOrder?: string; search?: string; start?: string; end?: string } = {}) { return this.repos.domain.getDomainStatsPaginated(backendId, opts); }
+  getDomainStats(backendId: number, limit = 100, start?: string, end?: string) {
+    return this.withRangeQueryCache(
+      'domainStats',
+      [backendId, limit, start || '', end || ''],
+      start,
+      end,
+      () => this.repos.domain.getDomainStats(backendId, limit, start, end),
+    );
+  }
+  getTopDomains(backendId: number, limit = 10, start?: string, end?: string) {
+    return this.withRangeQueryCache(
+      'topDomains',
+      [backendId, limit, start || '', end || ''],
+      start,
+      end,
+      () => this.repos.domain.getTopDomains(backendId, limit, start, end),
+    );
+  }
+  getTopDomainsLight(backendId: number, limit = 10, start?: string, end?: string) {
+    return this.withRangeQueryCache(
+      'topDomainsLight',
+      [backendId, limit, start || '', end || ''],
+      start,
+      end,
+      () => this.repos.domain.getTopDomainsLight(backendId, limit, start, end),
+    );
+  }
+  getDomainStatsPaginated(
+    backendId: number,
+    opts: { offset?: number; limit?: number; sortBy?: string; sortOrder?: string; search?: string; start?: string; end?: string } = {},
+  ) {
+    return this.withRangeQueryCache(
+      'domainStatsPaginated',
+      [backendId, opts.offset || 0, opts.limit || 50, opts.sortBy || '', opts.sortOrder || '', opts.search || '', opts.start || '', opts.end || ''],
+      opts.start,
+      opts.end,
+      () => this.repos.domain.getDomainStatsPaginated(backendId, opts),
+    );
+  }
   getDomainIPDetails(backendId: number, domain: string, start?: string, end?: string, limit?: number, sourceIP?: string, sourceChain?: string) { return this.repos.ip.getDomainIPDetails(backendId, domain, start, end, limit, sourceIP, sourceChain); }
   getDomainProxyStats(backendId: number, domain: string, start?: string, end?: string, sourceIP?: string, sourceChain?: string) { return this.repos.domain.getDomainProxyStats(backendId, domain, start, end, sourceIP, sourceChain); }
 
   // ==================== IP ====================
-  getIPStats(backendId: number, limit = 100, start?: string, end?: string) { return this.repos.ip.getIPStats(backendId, limit, start, end); }
+  getIPStats(backendId: number, limit = 100, start?: string, end?: string) {
+    return this.withRangeQueryCache(
+      'ipStats',
+      [backendId, limit, start || '', end || ''],
+      start,
+      end,
+      () => this.repos.ip.getIPStats(backendId, limit, start, end),
+    );
+  }
   getIPStatsByIPs(backendId: number, ips: string[]) { return this.repos.ip.getIPStatsByIPs(backendId, ips); }
-  getIPStatsPaginated(backendId: number, opts: { offset?: number; limit?: number; sortBy?: string; sortOrder?: string; search?: string; start?: string; end?: string } = {}) { return this.repos.ip.getIPStatsPaginated(backendId, opts); }
+  getIPStatsPaginated(
+    backendId: number,
+    opts: { offset?: number; limit?: number; sortBy?: string; sortOrder?: string; search?: string; start?: string; end?: string } = {},
+  ) {
+    return this.withRangeQueryCache(
+      'ipStatsPaginated',
+      [backendId, opts.offset || 0, opts.limit || 50, opts.sortBy || '', opts.sortOrder || '', opts.search || '', opts.start || '', opts.end || ''],
+      opts.start,
+      opts.end,
+      () => this.repos.ip.getIPStatsPaginated(backendId, opts),
+    );
+  }
   getIPDomainDetails(backendId: number, ip: string, start?: string, end?: string, limit?: number, sourceIP?: string, sourceChain?: string) { return this.repos.ip.getIPDomainDetails(backendId, ip, start, end, limit, sourceIP, sourceChain); }
   getIPProxyStats(backendId: number, ip: string, start?: string, end?: string, sourceIP?: string, sourceChain?: string) { return this.repos.ip.getIPProxyStats(backendId, ip, start, end, sourceIP, sourceChain); }
   getTopIPs(backendId: number, limit = 10, start?: string, end?: string) { return this.getIPStats(backendId, limit, start, end); }
+  getTopIPsLight(backendId: number, limit = 10, start?: string, end?: string) {
+    return this.withRangeQueryCache(
+      'topIPsLight',
+      [backendId, limit, start || '', end || ''],
+      start,
+      end,
+      () => this.repos.ip.getTopIPsLight(backendId, limit, start, end),
+    );
+  }
   updateASNInfo(ip: string, asn: string, org: string) { this.repos.ip.updateASNInfo(ip, asn, org); }
   getASNInfo(ips: string[]) { return this.repos.ip.getASNInfo(ips); }
   getASNInfoForIP(ip: string) { return this.repos.ip.getASNInfoForIP(ip); }
@@ -476,29 +593,93 @@ export class StatsDatabase {
   saveIPGeolocation(ip: string, geo: { country: string; country_name: string; city: string; asn: string; as_name: string; as_domain: string; continent: string; continent_name: string }) { this.repos.ip.saveIPGeolocation(ip, geo); }
 
   // ==================== Timeseries ====================
-  getHourlyStats(backendId: number, hours = 24, start?: string, end?: string) { return this.repos.timeseries.getHourlyStats(backendId, hours, start, end); }
+  getHourlyStats(backendId: number, hours = 24, start?: string, end?: string) {
+    return this.withRangeQueryCache(
+      'hourlyStats',
+      [backendId, hours, start || '', end || ''],
+      start,
+      end,
+      () => this.repos.timeseries.getHourlyStats(backendId, hours, start, end),
+    );
+  }
   getTodayTraffic(backendId: number) { return this.repos.timeseries.getTodayTraffic(backendId); }
-  getTrafficInRange(backendId: number, start?: string, end?: string) { return this.repos.timeseries.getTrafficInRange(backendId, start, end); }
-  getTrafficTrend(backendId: number, minutes?: number, start?: string, end?: string) { return this.repos.timeseries.getTrafficTrend(backendId, minutes, start, end); }
-  getTrafficTrendAggregated(backendId: number, minutes?: number, bucketMinutes?: number, start?: string, end?: string) { return this.repos.timeseries.getTrafficTrendAggregated(backendId, minutes, bucketMinutes, start, end); }
+  getTrafficInRange(backendId: number, start?: string, end?: string) {
+    return this.withRangeQueryCache(
+      'trafficInRange',
+      [backendId, start || '', end || ''],
+      start,
+      end,
+      () => this.repos.timeseries.getTrafficInRange(backendId, start, end),
+    );
+  }
+  getTrafficTrend(backendId: number, minutes?: number, start?: string, end?: string) {
+    return this.withRangeQueryCache(
+      'trafficTrend',
+      [backendId, minutes || 30, start || '', end || ''],
+      start,
+      end,
+      () => this.repos.timeseries.getTrafficTrend(backendId, minutes, start, end),
+    );
+  }
+  getTrafficTrendAggregated(backendId: number, minutes?: number, bucketMinutes?: number, start?: string, end?: string) {
+    return this.withRangeQueryCache(
+      'trafficTrendAggregated',
+      [backendId, minutes || 30, bucketMinutes || 1, start || '', end || ''],
+      start,
+      end,
+      () => this.repos.timeseries.getTrafficTrendAggregated(backendId, minutes, bucketMinutes, start, end),
+    );
+  }
 
   // ==================== Country ====================
-  getCountryStats(backendId: number, limit?: number, start?: string, end?: string) { return this.repos.country.getCountryStats(backendId, limit, start, end); }
+  getCountryStats(backendId: number, limit?: number, start?: string, end?: string) {
+    return this.withRangeQueryCache(
+      'countryStats',
+      [backendId, limit || 50, start || '', end || ''],
+      start,
+      end,
+      () => this.repos.country.getCountryStats(backendId, limit, start, end),
+    );
+  }
   updateCountryStats(backendId: number, country: string, countryName: string, continent: string, upload: number, download: number) { this.repos.country.updateCountryStats(backendId, country, countryName, continent, upload, download); }
   batchUpdateCountryStats(backendId: number, results: Array<{ country: string; countryName: string; continent: string; upload: number; download: number; timestampMs?: number }>) { this.repos.country.batchUpdateCountryStats(backendId, results); }
 
   // ==================== Device ====================
-  getDevices(backendId: number, limit?: number, start?: string, end?: string) { return this.repos.device.getDevices(backendId, limit, start, end); }
+  getDevices(backendId: number, limit?: number, start?: string, end?: string) {
+    return this.withRangeQueryCache(
+      'deviceStats',
+      [backendId, limit || 50, start || '', end || ''],
+      start,
+      end,
+      () => this.repos.device.getDevices(backendId, limit, start, end),
+    );
+  }
   getDeviceDomains(backendId: number, sourceIP: string, limit?: number, start?: string, end?: string) { return this.repos.device.getDeviceDomains(backendId, sourceIP, limit, start, end); }
   getDeviceIPs(backendId: number, sourceIP: string, limit?: number, start?: string, end?: string) { return this.repos.device.getDeviceIPs(backendId, sourceIP, limit, start, end); }
 
   // ==================== Proxy ====================
-  getProxyStats(backendId: number, start?: string, end?: string) { return this.repos.proxy.getProxyStats(backendId, start, end); }
+  getProxyStats(backendId: number, start?: string, end?: string) {
+    return this.withRangeQueryCache(
+      'proxyStats',
+      [backendId, start || '', end || ''],
+      start,
+      end,
+      () => this.repos.proxy.getProxyStats(backendId, start, end),
+    );
+  }
   getProxyDomains(backendId: number, chain: string, limit?: number, start?: string, end?: string) { return this.repos.proxy.getProxyDomains(backendId, chain, limit, start, end); }
   getProxyIPs(backendId: number, chain: string, limit?: number, start?: string, end?: string) { return this.repos.proxy.getProxyIPs(backendId, chain, limit, start, end); }
 
   // ==================== Rule ====================
-  getRuleStats(backendId: number, start?: string, end?: string) { return this.repos.rule.getRuleStats(backendId, start, end); }
+  getRuleStats(backendId: number, start?: string, end?: string) {
+    return this.withRangeQueryCache(
+      'ruleStats',
+      [backendId, start || '', end || ''],
+      start,
+      end,
+      () => this.repos.rule.getRuleStats(backendId, start, end),
+    );
+  }
   getRuleProxyMap(backendId: number) { return this.repos.rule.getRuleProxyMap(backendId); }
   getRuleDomains(backendId: number, rule: string, limit?: number, start?: string, end?: string) { return this.repos.rule.getRuleDomains(backendId, rule, limit, start, end); }
   getRuleIPs(backendId: number, rule: string, limit?: number, start?: string, end?: string) { return this.repos.rule.getRuleIPs(backendId, rule, limit, start, end); }
@@ -525,18 +706,125 @@ export class StatsDatabase {
     return { startMinute: this.toMinuteKey(startDate), endMinute: this.toMinuteKey(endDate) };
   }
 
+  private toHourKey(date: Date): string {
+    return `${date.toISOString().slice(0, 13)}:00:00`;
+  }
+
+  private resolveFactTableRange(
+    start?: string,
+    end?: string,
+  ): { table: 'hourly_dim_stats' | 'minute_dim_stats'; startKey: string; endKey: string } {
+    if (!start || !end) {
+      return { table: 'minute_dim_stats', startKey: '', endKey: '' };
+    }
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      return { table: 'minute_dim_stats', startKey: this.toMinuteKey(startDate), endKey: this.toMinuteKey(endDate) };
+    }
+    const rangeMs = endDate.getTime() - startDate.getTime();
+    const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+    if (rangeMs > SIX_HOURS_MS) {
+      return { table: 'hourly_dim_stats', startKey: this.toHourKey(startDate), endKey: this.toHourKey(endDate) };
+    }
+    return { table: 'minute_dim_stats', startKey: this.toMinuteKey(startDate), endKey: this.toMinuteKey(endDate) };
+  }
+
+  private getRangeCacheTTL(end?: string): number {
+    const realtimeTTL = Math.max(
+      1_000,
+      parseInt(process.env.DB_RANGE_QUERY_CACHE_TTL_MS || '8000', 10) || 8000,
+    );
+    const historicalTTL = Math.max(
+      realtimeTTL,
+      parseInt(process.env.DB_HISTORICAL_QUERY_CACHE_TTL_MS || '300000', 10) || 300000,
+    );
+    if (!end) return realtimeTTL;
+
+    const endMs = new Date(end).getTime();
+    if (Number.isNaN(endMs)) return realtimeTTL;
+
+    const toleranceMs = Math.max(
+      10_000,
+      parseInt(process.env.REALTIME_RANGE_END_TOLERANCE_MS || '120000', 10) || 120000,
+    );
+    return endMs >= Date.now() - toleranceMs ? realtimeTTL : historicalTTL;
+  }
+
+  private pruneRangeQueryCache(): void {
+    const maxEntries = Math.max(
+      128,
+      parseInt(process.env.DB_RANGE_QUERY_CACHE_MAX_ENTRIES || '1024', 10) || 1024,
+    );
+    const now = Date.now();
+
+    for (const [key, entry] of this.rangeQueryCache) {
+      if (entry.expiresAt <= now) {
+        this.rangeQueryCache.delete(key);
+      }
+    }
+
+    while (this.rangeQueryCache.size > maxEntries) {
+      const oldestKey = this.rangeQueryCache.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      this.rangeQueryCache.delete(oldestKey);
+    }
+  }
+
+  private withRangeQueryCache<T>(
+    prefix: string,
+    parts: Array<string | number>,
+    start: string | undefined,
+    end: string | undefined,
+    compute: () => T,
+  ): T {
+    if (process.env.DB_RANGE_QUERY_CACHE_DISABLED === '1') {
+      return compute();
+    }
+
+    if (!this.parseMinuteRange(start, end)) {
+      return compute();
+    }
+
+    const key = `${prefix}:${parts.join('|')}`;
+    const now = Date.now();
+    const cached = this.rangeQueryCache.get(key);
+    if (cached && cached.expiresAt > now) {
+      return cached.value as T;
+    }
+
+    const value = compute();
+    const ttl = this.getRangeCacheTTL(end);
+    this.rangeQueryCache.set(key, {
+      value,
+      expiresAt: now + ttl,
+    });
+    this.pruneRangeQueryCache();
+    return value;
+  }
+
   private prepareSummaryStmts() {
     return {
-      rangeTraffic: this.db.prepare(`
+      rangeCombined: this.db.prepare(`
         SELECT
           COALESCE(SUM(connections), 0) as connections,
           COALESCE(SUM(upload), 0) as upload,
-          COALESCE(SUM(download), 0) as download
+          COALESCE(SUM(download), 0) as download,
+          COUNT(DISTINCT CASE WHEN domain != '' THEN domain END) as uniqueDomains,
+          COUNT(DISTINCT CASE WHEN ip != '' THEN ip END) as uniqueIPs
         FROM minute_dim_stats
         WHERE backend_id = ? AND minute >= ? AND minute <= ?
       `),
-      rangeDomains: this.db.prepare(`SELECT COUNT(DISTINCT domain) as count FROM minute_dim_stats WHERE backend_id = ? AND minute >= ? AND minute <= ? AND domain != ''`),
-      rangeIPs: this.db.prepare(`SELECT COUNT(DISTINCT ip) as count FROM minute_dim_stats WHERE backend_id = ? AND minute >= ? AND minute <= ? AND ip != ''`),
+      rangeCombinedHourly: this.db.prepare(`
+        SELECT
+          COALESCE(SUM(connections), 0) as connections,
+          COALESCE(SUM(upload), 0) as upload,
+          COALESCE(SUM(download), 0) as download,
+          COUNT(DISTINCT CASE WHEN domain != '' THEN domain END) as uniqueDomains,
+          COUNT(DISTINCT CASE WHEN ip != '' THEN ip END) as uniqueIPs
+        FROM hourly_dim_stats
+        WHERE backend_id = ? AND hour >= ? AND hour <= ?
+      `),
       allTraffic: this.db.prepare(`SELECT COALESCE(SUM(total_connections), 0) as connections, COALESCE(SUM(total_upload), 0) as upload, COALESCE(SUM(total_download), 0) as download FROM ip_stats WHERE backend_id = ?`),
       allDomains: this.db.prepare(`SELECT COUNT(DISTINCT domain) as count FROM domain_stats WHERE backend_id = ?`),
       allIPs: this.db.prepare(`SELECT COUNT(DISTINCT ip) as count FROM ip_stats WHERE backend_id = ?`),
@@ -556,18 +844,28 @@ export class StatsDatabase {
     start?: string,
     end?: string,
   ): { totalConnections: number; totalUpload: number; totalDownload: number; uniqueDomains: number; uniqueIPs: number } {
-    const range = this.parseMinuteRange(start, end);
-    const s = this.summaryStmts;
-    if (range) {
-      const { connections, upload, download } = s.rangeTraffic.get(backendId, range.startMinute, range.endMinute) as { connections: number; upload: number; download: number };
-      const uniqueDomains = (s.rangeDomains.get(backendId, range.startMinute, range.endMinute) as { count: number }).count;
-      const uniqueIPs = (s.rangeIPs.get(backendId, range.startMinute, range.endMinute) as { count: number }).count;
-      return { totalConnections: connections, totalUpload: upload, totalDownload: download, uniqueDomains, uniqueIPs };
-    }
-    const { connections, upload, download } = s.allTraffic.get(backendId) as { connections: number; upload: number; download: number };
-    const uniqueDomains = (s.allDomains.get(backendId) as { count: number }).count;
-    const uniqueIPs = (s.allIPs.get(backendId) as { count: number }).count;
-    return { totalConnections: connections, totalUpload: upload, totalDownload: download, uniqueDomains, uniqueIPs };
+    return this.withRangeQueryCache(
+      'summary',
+      [backendId, start || '', end || ''],
+      start,
+      end,
+      () => {
+        const range = this.parseMinuteRange(start, end);
+        const s = this.summaryStmts;
+        if (range) {
+          const resolved = this.resolveFactTableRange(start, end);
+          const stmt = resolved.table === 'hourly_dim_stats' ? s.rangeCombinedHourly : s.rangeCombined;
+          const { connections, upload, download, uniqueDomains, uniqueIPs } = stmt.get(
+            backendId, resolved.startKey, resolved.endKey,
+          ) as { connections: number; upload: number; download: number; uniqueDomains: number; uniqueIPs: number };
+          return { totalConnections: connections, totalUpload: upload, totalDownload: download, uniqueDomains, uniqueIPs };
+        }
+        const { connections, upload, download } = s.allTraffic.get(backendId) as { connections: number; upload: number; download: number };
+        const uniqueDomains = (s.allDomains.get(backendId) as { count: number }).count;
+        const uniqueIPs = (s.allIPs.get(backendId) as { count: number }).count;
+        return { totalConnections: connections, totalUpload: upload, totalDownload: download, uniqueDomains, uniqueIPs };
+      },
+    );
   }
 
   /**

@@ -15,13 +15,14 @@ export class ProxyRepository extends BaseRepository {
   getProxyStats(backendId: number, start?: string, end?: string): ProxyStats[] {
     const range = this.parseMinuteRange(start, end);
     if (range) {
+      const resolved = this.resolveFactTable(start!, end!);
       const stmt = this.db.prepare(`
         SELECT chain, SUM(upload) as totalUpload, SUM(download) as totalDownload,
-               SUM(connections) as totalConnections, MAX(minute) as lastSeen
-        FROM minute_dim_stats WHERE backend_id = ? AND minute >= ? AND minute <= ?
+               SUM(connections) as totalConnections, MAX(${resolved.timeCol}) as lastSeen
+        FROM ${resolved.table} WHERE backend_id = ? AND ${resolved.timeCol} >= ? AND ${resolved.timeCol} <= ?
         GROUP BY chain ORDER BY (SUM(upload) + SUM(download)) DESC
       `);
-      return this.aggregateProxyStatsByFirstHop(stmt.all(backendId, range.startMinute, range.endMinute) as ProxyStats[]);
+      return this.aggregateProxyStatsByFirstHop(stmt.all(backendId, resolved.startKey, resolved.endKey) as ProxyStats[]);
     }
 
     const stmt = this.db.prepare(`
@@ -35,14 +36,15 @@ export class ProxyRepository extends BaseRepository {
   getProxyDomains(backendId: number, chain: string, limit = 50, start?: string, end?: string): DomainStats[] {
     const range = this.parseMinuteRange(start, end);
     if (range) {
+      const resolved = this.resolveFactTable(start!, end!);
       const stmt = this.db.prepare(`
         SELECT domain, SUM(upload) as totalUpload, SUM(download) as totalDownload,
-               SUM(connections) as totalConnections, MAX(minute) as lastSeen, GROUP_CONCAT(DISTINCT ip) as ips
-        FROM minute_dim_stats
-        WHERE backend_id = ? AND minute >= ? AND minute <= ? AND (chain = ? OR chain LIKE ?) AND domain != ''
+               SUM(connections) as totalConnections, MAX(${resolved.timeCol}) as lastSeen, GROUP_CONCAT(DISTINCT ip) as ips
+        FROM ${resolved.table}
+        WHERE backend_id = ? AND ${resolved.timeCol} >= ? AND ${resolved.timeCol} <= ? AND (chain = ? OR chain LIKE ?) AND domain != ''
         GROUP BY domain ORDER BY (SUM(upload) + SUM(download)) DESC LIMIT ?
       `);
-      const rows = stmt.all(backendId, range.startMinute, range.endMinute, chain, `${chain} > %`, limit) as Array<{
+      const rows = stmt.all(backendId, resolved.startKey, resolved.endKey, chain, `${chain} > %`, limit) as Array<{
         domain: string; totalUpload: number; totalDownload: number; totalConnections: number; lastSeen: string; ips: string | null;
       }>;
       return rows.map(row => ({ ...row, ips: row.ips ? row.ips.split(',').filter(Boolean) : [], rules: [], chains: [chain] })) as DomainStats[];
@@ -65,20 +67,21 @@ export class ProxyRepository extends BaseRepository {
   getProxyIPs(backendId: number, chain: string, limit = 50, start?: string, end?: string): IPStats[] {
     const range = this.parseMinuteRange(start, end);
     if (range) {
+      const resolved = this.resolveFactTable(start!, end!);
       const stmt = this.db.prepare(`
         SELECT m.ip, SUM(m.upload) as totalUpload, SUM(m.download) as totalDownload,
-               SUM(m.connections) as totalConnections, MAX(m.minute) as lastSeen,
+               SUM(m.connections) as totalConnections, MAX(m.${resolved.timeCol}) as lastSeen,
                GROUP_CONCAT(DISTINCT CASE WHEN m.domain != '' THEN m.domain END) as domains,
                COALESCE(i.asn, g.asn) as asn,
                CASE WHEN g.country IS NOT NULL THEN json_array(g.country, COALESCE(g.country_name, g.country), COALESCE(g.city, ''), COALESCE(g.as_name, ''))
                     WHEN i.geoip IS NOT NULL THEN json(i.geoip) ELSE NULL END as geoIP
-        FROM minute_dim_stats m
+        FROM ${resolved.table} m
         LEFT JOIN ip_stats i ON m.backend_id = i.backend_id AND m.ip = i.ip
         LEFT JOIN geoip_cache g ON m.ip = g.ip
-        WHERE m.backend_id = ? AND m.minute >= ? AND m.minute <= ? AND (m.chain = ? OR m.chain LIKE ?) AND m.ip != ''
+        WHERE m.backend_id = ? AND m.${resolved.timeCol} >= ? AND m.${resolved.timeCol} <= ? AND (m.chain = ? OR m.chain LIKE ?) AND m.ip != ''
         GROUP BY m.ip ORDER BY (SUM(m.upload) + SUM(m.download)) DESC LIMIT ?
       `);
-      const rows = stmt.all(backendId, range.startMinute, range.endMinute, chain, `${chain} > %`, limit) as Array<{
+      const rows = stmt.all(backendId, resolved.startKey, resolved.endKey, chain, `${chain} > %`, limit) as Array<{
         ip: string; totalUpload: number; totalDownload: number; totalConnections: number; lastSeen: string;
         domains: string | null; asn: string | null; geoIP: string | null;
       }>;

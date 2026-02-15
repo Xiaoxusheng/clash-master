@@ -4,10 +4,27 @@ import type { TimeRange } from '@/lib/api';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
+export interface LiveConnection {
+  id: string;
+  timestamp: number;
+  network: string;
+  sourceIP: string;
+  sourcePort: string;
+  destinationIP: string;
+  destinationPort: string;
+  domain?: string;
+  rule: string;
+  rulePayload?: string;
+  proxy: string;
+  upload: number;
+  download: number;
+}
+
 interface WebSocketMessage {
   type: 'stats' | 'ping' | 'pong';
   backendId?: number;
   data?: StatsSummary;
+  liveConnections?: LiveConnection[];
   timestamp: string;
 }
 
@@ -40,9 +57,11 @@ interface UseStatsWebSocketOptions {
   ipsPageSortBy?: string;
   ipsPageSortOrder?: "asc" | "desc";
   ipsPageSearch?: string;
+  includeLiveConnections?: boolean;
+  liveConnectionsLimit?: number;
   trackLastMessage?: boolean;
   enabled?: boolean;
-  onMessage?: (data: StatsSummary) => void;
+  onMessage?: (data: StatsSummary, liveConnections?: LiveConnection[]) => void;
   onConnect?: () => void;
   onDisconnect?: () => void;
   onError?: (error: Event) => void;
@@ -155,11 +174,14 @@ export function useStatsWebSocket(options: UseStatsWebSocketOptions = {}) {
     ipsPageSortBy,
     ipsPageSortOrder,
     ipsPageSearch,
+    includeLiveConnections,
+    liveConnectionsLimit,
     trackLastMessage = true,
     enabled = true,
   } = options;
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
   const [lastMessage, setLastMessage] = useState<StatsSummary | null>(null);
+  const [liveConnections, setLiveConnections] = useState<LiveConnection[]>([]);
   const [latency, setLatency] = useState<number | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -250,7 +272,10 @@ export function useStatsWebSocket(options: UseStatsWebSocketOptions = {}) {
             if (trackLastMessageRef.current) {
               setLastMessage(message.data);
             }
-            onMessageRef.current?.(message.data);
+            if (message.liveConnections) {
+              setLiveConnections(message.liveConnections);
+            }
+            onMessageRef.current?.(message.data, message.liveConnections);
           } else if (message.type === 'pong') {
             if (lastPingTimeRef.current > 0) {
               setLatency(Date.now() - lastPingTimeRef.current);
@@ -339,6 +364,8 @@ export function useStatsWebSocket(options: UseStatsWebSocketOptions = {}) {
       ipsPageSortBy,
       ipsPageSortOrder,
       ipsPageSearch,
+      includeLiveConnections,
+      liveConnectionsLimit,
       timestamp: new Date().toISOString(),
     }));
   }, [
@@ -371,6 +398,8 @@ export function useStatsWebSocket(options: UseStatsWebSocketOptions = {}) {
     ipsPageSortBy,
     ipsPageSortOrder,
     ipsPageSearch,
+    includeLiveConnections,
+    liveConnectionsLimit,
     status,
   ]);
 
@@ -398,6 +427,7 @@ export function useStatsWebSocket(options: UseStatsWebSocketOptions = {}) {
   return {
     status,
     lastMessage,
+    liveConnections,
     latency,
     connect,
     disconnect,

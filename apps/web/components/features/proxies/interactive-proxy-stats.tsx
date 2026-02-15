@@ -11,6 +11,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { CountryFlag, extractCountryCodeFromText, stripLeadingFlagEmoji } from "@/components/features/countries/country-flag";
 import { formatBytes, formatNumber } from "@/lib/utils";
 import { cn } from "@/lib/utils";
+import { useIsWindows } from "@/lib/hooks/use-is-windows";
 import { type TimeRange } from "@/lib/api";
 import { useStableTimeRange } from "@/lib/hooks/use-stable-time-range";
 import { useStatsWebSocket } from "@/lib/websocket";
@@ -103,6 +104,7 @@ export function InteractiveProxyStats({
   const queryClient = useQueryClient();
   const stableTimeRange = useStableTimeRange(timeRange);
   const detailTimeRange = stableTimeRange;
+  const isWindows = useIsWindows();
 
   const { data: listData, isLoading: listQueryLoading } = useProxies({
     activeBackendId,
@@ -334,7 +336,7 @@ export function InteractiveProxyStats({
                     <button key={item.rawName} onClick={() => handleProxyClick(item.rawName)} className={cn("w-full p-2.5 rounded-xl border text-left transition-all duration-200 overflow-hidden", isSelected ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border/50 bg-card/50 hover:bg-card hover:border-primary/30")}>
                       <div className="flex items-center gap-2 mb-1.5 min-w-0">
                         <span className={cn("w-5 h-5 rounded-md text-[10px] font-bold flex items-center justify-center shrink-0", badgeColor)}>{item.rank + 1}</span>
-                        <span className="flex-1 text-sm font-medium truncate min-w-0" title={rawDisplayName}>
+                        <span className={cn("flex-1 text-sm font-medium truncate min-w-0", isWindows && "emoji-flag-font")} title={rawDisplayName}>
                           {rawDisplayName}
                         </span>
                         <span className="text-sm font-bold tabular-nums shrink-0 whitespace-nowrap ml-auto">{formatBytes(item.value)}</span>

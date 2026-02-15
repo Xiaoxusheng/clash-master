@@ -14,6 +14,7 @@ interface TopListItemProps {
   color?: string;
   showRank?: boolean;
   valueFormatter?: (value: number) => string;
+  titleClassName?: string;
 }
 
 const RANK_COLORS: Record<number, string> = {
@@ -32,6 +33,7 @@ export function TopListItem({
   color = "hsl(var(--primary))",
   showRank = true,
   valueFormatter,
+  titleClassName,
 }: TopListItemProps) {
   const percentage = total > 0 ? (value / total) * 100 : 0;
   const isTop3 = rank <= 3;
@@ -65,7 +67,7 @@ export function TopListItem({
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between mb-1">
             <div className="flex items-center gap-2 min-w-0">
-              <span className="text-sm font-medium truncate" title={title}>
+              <span className={cn("text-sm font-medium truncate", titleClassName)} title={title}>
                 {title}
               </span>
               {subtitle && (

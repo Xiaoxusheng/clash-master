@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.8] - 2026-02-15
+
+### Performance
+
+- **Up to 60x query performance improvement** 🚀
+  - Added `hourly_dim_stats` / `hourly_country_stats` pre-aggregation tables, maintained in real-time on write
+  - All dimension queries (domain/ip/proxy/rule/device/country) automatically route to hourly pre-aggregated tables for ranges > 6h
+  - Timeseries query optimization: `getHourlyStats`, `getTrafficInRange`, `getTrafficTrend`, `getTrafficTrendAggregated` now read directly from `hourly_stats` for long-range queries instead of scanning and re-aggregating `minute_stats`
+  - 7-day range queries reduced from ~10,080 rows scanned to ~168 rows
+  - Per WebSocket broadcast total row scans reduced from ~20,160 to ~336
+- **`resolveFactTableSplit` hybrid query strategy**: Long-range queries split into hourly (completed hours) + minute (current hour tail) for both performance and precision
+
+### Added
+
+- **Testing Infrastructure** 🧪
+  - Introduced Vitest framework with unit tests for `traffic-writer`, `auth.service`, and `stats.service`
+  - Added test helpers (`helpers.ts`)
+  - Added ESLint configuration and `.env.example`
+- **Time Range Picker Enhancements**
+  - Added "1 hour" quick preset, replacing the default 30-minute view
+  - Added "Today" quick option for trend charts (midnight to current time)
+  - Moved 30-minute preset to debug short presets list
+- **`BatchBuffer` module**: Standalone batch buffering module, decoupled from collector
+
+### Fixed
+
+- **Cookie authentication security**: Changed `secure` flag from `process.env.NODE_ENV === 'production'` to `request.protocol === 'https'`, fixing login loop on HTTP intranet environments where cookies could not be set
+- **Windows emoji flag display**: Added `emoji-flag-font` CSS class to proxy-related components (list, chart, grid, interactive stats, rule stats) to fix broken flag emoji rendering on Windows
+
+### Refactored
+
+- **Global AuthGuard refactoring**: Extracted authentication logic from dashboard layout into a standalone `AuthGuard` component, simplified `auth.tsx` and `auth-queries.ts`
+- **Collector service decomposition**: Significantly slimmed down `collector.ts` and `surge-collector.ts` by extracting `BatchBuffer` and `RealtimeStore` modules
+- Removed legacy `api.ts` entry file, unified to modular controllers
+
+### Technical Details
+
+- `hourly_dim_stats` schema: `(backend_id, hour, dimension, dim_key, upload, download, connections)`, updated in real-time via `INSERT ... ON CONFLICT DO UPDATE`
+- `resolveFactTable` / `resolveFactTableSplit` methods implemented in `BaseRepository`, shared across all repositories
+- Timeseries query thresholds: `getTrafficInRange`/`getTrafficTrend` switch to `hourly_stats` at > 6h; `getTrafficTrendAggregated` switches when `bucketMinutes >= 60`
+- Seamless upgrade: new tables auto-created via `CREATE TABLE IF NOT EXISTS`, existing `minute_dim_stats` data backfilled to hourly tables on first startup
+
 ## [1.2.7] - 2026-02-14
 
 ### Added

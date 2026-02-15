@@ -10,7 +10,8 @@ import {
   extractCountryCodeFromText,
   stripLeadingFlagEmoji,
 } from "@/components/features/countries";
-import { formatBytes, formatNumber } from "@/lib/utils";
+import { formatBytes, formatNumber, cn } from "@/lib/utils";
+import { useIsWindows } from "@/lib/hooks/use-is-windows";
 import type { ProxyStats } from "@neko-master/shared";
 
 interface ProxyTopGridProps {
@@ -60,6 +61,7 @@ export function ProxyTopGrid({
   const [sortBy, setSortBy] = useState<SortBy>("traffic");
   const t = useTranslations("topProxies");
   const proxiesT = useTranslations("proxies");
+  const isWindows = useIsWindows();
 
   const proxies = useMemo(() => {
     if (!data) return [];
@@ -136,7 +138,7 @@ export function ProxyTopGrid({
 
               {/* Name */}
               <div className="flex-1 min-w-0">
-                <p className="font-medium text-sm truncate" title={proxy.chain}>
+                <p className={cn("font-medium text-sm truncate", isWindows && "emoji-flag-font")} title={proxy.chain}>
                   {proxy.displayName}
                 </p>
               </div>

@@ -44,11 +44,12 @@ export async function authController(app: FastifyInstance) {
     
     if (result.valid) {
       // Set valid token as HttpOnly cookie
-      const isProduction = process.env.NODE_ENV === 'production';
+      // Only use secure if the connection is actually HTTPS
+      const isSecure = request.protocol === 'https';
       reply.setCookie('neko-session', token, {
         path: '/',
         httpOnly: true,
-        secure: isProduction, // Only use secure in production
+        secure: isSecure, // Only use secure on HTTPS connections
         sameSite: 'strict',
         maxAge: 60 * 60 * 24 * 7, // 7 days
       });

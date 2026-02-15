@@ -23,41 +23,44 @@ export class CountryRepository extends BaseRepository {
   getCountryStats(backendId: number, limit = 50, start?: string, end?: string): CountryStatsRow[] {
     const range = this.parseMinuteRange(start, end);
     if (range) {
+      const resolved = this.resolveCountryFactTable(start!, end!);
       const minuteCountryStmt = this.db.prepare(`
         SELECT country, MAX(country_name) as countryName, MAX(continent) as continent,
                SUM(upload) as totalUpload, SUM(download) as totalDownload, SUM(connections) as totalConnections
-        FROM minute_country_stats
-        WHERE backend_id = ? AND minute >= ? AND minute <= ?
+        FROM ${resolved.table}
+        WHERE backend_id = ? AND ${resolved.timeCol} >= ? AND ${resolved.timeCol} <= ?
         GROUP BY country
         ORDER BY (SUM(upload) + SUM(download)) DESC
         LIMIT ?
       `);
-      const minuteCountryRows = minuteCountryStmt.all(backendId, range.startMinute, range.endMinute, limit) as CountryStatsRow[];
+      const minuteCountryRows = minuteCountryStmt.all(backendId, resolved.startKey, resolved.endKey, limit) as CountryStatsRow[];
       if (minuteCountryRows.length > 0) return minuteCountryRows;
 
-      // Fallback 1: derive from minute_dim_stats + geoip_cache
+      // Fallback 1: derive from dim_stats + geoip_cache
+      const dimResolved = this.resolveFactTable(start!, end!);
       const minuteDimFallbackStmt = this.db.prepare(`
         SELECT
           COALESCE(g.country, 'UNKNOWN') as country,
           COALESCE(MAX(g.country_name), 'Unknown') as countryName,
           COALESCE(MAX(g.continent), 'Unknown') as continent,
           SUM(m.upload) as totalUpload, SUM(m.download) as totalDownload, SUM(m.connections) as totalConnections
-        FROM minute_dim_stats m
+        FROM ${dimResolved.table} m
         LEFT JOIN geoip_cache g ON m.ip = g.ip
-        WHERE m.backend_id = ? AND m.minute >= ? AND m.minute <= ? AND m.ip != ''
+        WHERE m.backend_id = ? AND m.${dimResolved.timeCol} >= ? AND m.${dimResolved.timeCol} <= ? AND m.ip != ''
         GROUP BY COALESCE(g.country, 'UNKNOWN')
         ORDER BY (SUM(m.upload) + SUM(m.download)) DESC
         LIMIT ?
       `);
-      const minuteDimFallbackRows = minuteDimFallbackStmt.all(backendId, range.startMinute, range.endMinute, limit) as CountryStatsRow[];
+      const minuteDimFallbackRows = minuteDimFallbackStmt.all(backendId, dimResolved.startKey, dimResolved.endKey, limit) as CountryStatsRow[];
       if (minuteDimFallbackRows.length > 0) return minuteDimFallbackRows;
 
       // Fallback 2: aggregate from minute_stats as UNKNOWN
+      const minuteRange = this.parseMinuteRange(start, end)!;
       const totalStmt = this.db.prepare(`
         SELECT COALESCE(SUM(upload), 0) as upload, COALESCE(SUM(download), 0) as download, COALESCE(SUM(connections), 0) as connections
         FROM minute_stats WHERE backend_id = ? AND minute >= ? AND minute <= ?
       `);
-      const total = totalStmt.get(backendId, range.startMinute, range.endMinute) as { upload: number; download: number; connections: number };
+      const total = totalStmt.get(backendId, minuteRange.startMinute, minuteRange.endMinute) as { upload: number; download: number; connections: number };
       if (total.upload > 0 || total.download > 0 || total.connections > 0) {
         return [{ country: 'UNKNOWN', countryName: 'Unknown', continent: 'Unknown', totalUpload: total.upload, totalDownload: total.download, totalConnections: total.connections }];
       }
@@ -74,7 +77,7 @@ export class CountryRepository extends BaseRepository {
     return stmt.all(backendId, limit) as CountryStatsRow[];
   }
 
-  updateCountryStats(backendId: number, country: string, countryName: string, continent: string, upload: number, download: number): void {
+  updateCountryStats(backendId: number, country: string, countryName: string, continent: string, upload: number, download: number, timestampMs?: number): void {
     const stmt = this.db.prepare(`
       INSERT INTO country_stats (backend_id, country, country_name, continent, total_upload, total_download, total_connections, last_seen)
       VALUES (?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
@@ -83,6 +86,24 @@ export class CountryRepository extends BaseRepository {
         total_connections = total_connections + 1, last_seen = CURRENT_TIMESTAMP
     `);
     stmt.run(backendId, country, countryName, continent, upload, download, upload, download);
+
+    const now = new Date(timestampMs ?? Date.now());
+    const minute = this.toMinuteKey(now);
+    const hour = this.toHourKey(now);
+
+    this.db.prepare(`
+      INSERT INTO minute_country_stats (backend_id, minute, country, country_name, continent, upload, download, connections)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+      ON CONFLICT(backend_id, minute, country) DO UPDATE SET
+        upload = upload + ?, download = download + ?, connections = connections + 1
+    `).run(backendId, minute, country, countryName, continent, upload, download, upload, download);
+
+    this.db.prepare(`
+      INSERT INTO hourly_country_stats (backend_id, hour, country, country_name, continent, upload, download, connections)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+      ON CONFLICT(backend_id, hour, country) DO UPDATE SET
+        upload = upload + ?, download = download + ?, connections = connections + 1
+    `).run(backendId, hour, country, countryName, continent, upload, download, upload, download);
   }
 
   batchUpdateCountryStats(backendId: number, results: Array<{
@@ -106,28 +127,55 @@ export class CountryRepository extends BaseRepository {
         upload = upload + @upload, download = download + @download, connections = connections + @connections
     `);
 
+    const hourlyStmt = this.db.prepare(`
+      INSERT INTO hourly_country_stats (backend_id, hour, country, country_name, continent, upload, download, connections)
+      VALUES (@backendId, @hour, @country, @countryName, @continent, @upload, @download, @connections)
+      ON CONFLICT(backend_id, hour, country) DO UPDATE SET
+        upload = upload + @upload, download = download + @download, connections = connections + @connections
+    `);
+
     const tx = this.db.transaction(() => {
       const minuteMap = new Map<string, {
         minute: string; country: string; countryName: string; continent: string;
         upload: number; download: number; connections: number;
       }>();
+      const hourlyMap = new Map<string, {
+        hour: string; country: string; countryName: string; continent: string;
+        upload: number; download: number; connections: number;
+      }>();
 
       for (const r of results) {
         cumulativeStmt.run(backendId, r.country, r.countryName, r.continent, r.upload, r.download, r.upload, r.download);
-        const minute = this.toMinuteKey(new Date(r.timestampMs ?? Date.now()));
-        const key = `${minute}:${r.country}`;
-        const existing = minuteMap.get(key);
+        const now = new Date(r.timestampMs ?? Date.now());
+        const minute = this.toMinuteKey(now);
+        const hour = this.toHourKey(now);
+
+        const minuteKey = `${minute}:${r.country}`;
+        const existing = minuteMap.get(minuteKey);
         if (existing) {
           existing.upload += r.upload;
           existing.download += r.download;
           existing.connections++;
         } else {
-          minuteMap.set(key, { minute, country: r.country, countryName: r.countryName, continent: r.continent, upload: r.upload, download: r.download, connections: 1 });
+          minuteMap.set(minuteKey, { minute, country: r.country, countryName: r.countryName, continent: r.continent, upload: r.upload, download: r.download, connections: 1 });
+        }
+
+        const hourlyKey = `${hour}:${r.country}`;
+        const existingHourly = hourlyMap.get(hourlyKey);
+        if (existingHourly) {
+          existingHourly.upload += r.upload;
+          existingHourly.download += r.download;
+          existingHourly.connections++;
+        } else {
+          hourlyMap.set(hourlyKey, { hour, country: r.country, countryName: r.countryName, continent: r.continent, upload: r.upload, download: r.download, connections: 1 });
         }
       }
 
       for (const [, item] of minuteMap) {
         minuteStmt.run({ backendId, ...item });
+      }
+      for (const [, item] of hourlyMap) {
+        hourlyStmt.run({ backendId, ...item });
       }
     });
     tx();

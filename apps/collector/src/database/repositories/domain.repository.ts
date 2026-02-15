@@ -53,26 +53,27 @@ export class DomainRepository extends BaseRepository {
   getDomainStats(backendId: number, limit = 100, start?: string, end?: string): DomainStats[] {
     const range = this.parseMinuteRange(start, end);
     if (range) {
+      const resolved = this.resolveFactTable(start!, end!);
       const stmt = this.db.prepare(`
         SELECT
           domain,
           SUM(upload) as totalUpload,
           SUM(download) as totalDownload,
           SUM(connections) as totalConnections,
-          MAX(minute) as lastSeen,
+          MAX(${resolved.timeCol}) as lastSeen,
           GROUP_CONCAT(DISTINCT ip) as ips,
           GROUP_CONCAT(DISTINCT rule) as rules,
           GROUP_CONCAT(DISTINCT chain) as chains
-        FROM minute_dim_stats
-        WHERE backend_id = ? AND minute >= ? AND minute <= ? AND domain != ''
+        FROM ${resolved.table}
+        WHERE backend_id = ? AND ${resolved.timeCol} >= ? AND ${resolved.timeCol} <= ? AND domain != ''
         GROUP BY domain
         ORDER BY (SUM(upload) + SUM(download)) DESC
         LIMIT ?
       `);
       const rows = stmt.all(
         backendId,
-        range.startMinute,
-        range.endMinute,
+        resolved.startKey,
+        resolved.endKey,
         limit,
       ) as Array<{
         domain: string;
@@ -136,6 +137,48 @@ export class DomainRepository extends BaseRepository {
   }
 
   /**
+   * Get top domains (light version) - only name + traffic totals, no GROUP_CONCAT
+   * Used by overview/summary endpoints where IPs/rules/chains are not needed
+   */
+  getTopDomainsLight(backendId: number, limit = 10, start?: string, end?: string): DomainStats[] {
+    const range = this.parseMinuteRange(start, end);
+    if (range) {
+      const resolved = this.resolveFactTable(start!, end!);
+      const timeCol = resolved.table === 'hourly_dim_stats' ? 'hour' : 'minute';
+      const stmt = this.db.prepare(`
+        SELECT
+          domain,
+          SUM(upload) as totalUpload,
+          SUM(download) as totalDownload,
+          SUM(connections) as totalConnections,
+          MAX(${timeCol}) as lastSeen
+        FROM ${resolved.table}
+        WHERE backend_id = ? AND ${timeCol} >= ? AND ${timeCol} <= ? AND domain != ''
+        GROUP BY domain
+        ORDER BY (SUM(upload) + SUM(download)) DESC
+        LIMIT ?
+      `);
+      const rows = stmt.all(backendId, resolved.startKey, resolved.endKey, limit) as Array<{
+        domain: string; totalUpload: number; totalDownload: number; totalConnections: number; lastSeen: string;
+      }>;
+      return rows.map(row => ({ ...row, ips: [], rules: [], chains: [] })) as DomainStats[];
+    }
+
+    const stmt = this.db.prepare(`
+      SELECT domain, total_upload as totalUpload, total_download as totalDownload,
+             total_connections as totalConnections, last_seen as lastSeen
+      FROM domain_stats
+      WHERE backend_id = ?
+      ORDER BY (total_upload + total_download) DESC
+      LIMIT ?
+    `);
+    const rows = stmt.all(backendId, limit) as Array<{
+      domain: string; totalUpload: number; totalDownload: number; totalConnections: number; lastSeen: string;
+    }>;
+    return rows.map(row => ({ ...row, ips: [], rules: [], chains: [] })) as DomainStats[];
+  }
+
+  /**
    * Get domain stats with server-side pagination, sorting and search
    */
   getDomainStatsPaginated(backendId: number, opts: {
@@ -164,6 +207,7 @@ export class DomainRepository extends BaseRepository {
     const sortColumn = sortColumnMap[opts.sortBy || 'totalDownload'] || 'total_download';
 
     if (range) {
+      const resolved = this.resolveFactTable(opts.start!, opts.end!);
       const rangeSortColumnMap: Record<string, string> = {
         domain: 'domain',
         totalDownload: 'totalDownload',
@@ -176,15 +220,15 @@ export class DomainRepository extends BaseRepository {
         rangeSortColumnMap[opts.sortBy || 'totalDownload'] || 'totalDownload';
 
       const whereSearch = search ? 'AND domain LIKE ?' : '';
-      const baseParams: any[] = [backendId, range.startMinute, range.endMinute];
+      const baseParams: any[] = [backendId, resolved.startKey, resolved.endKey];
       const searchParams: any[] = search ? [`%${search}%`] : [];
 
       const countStmt = this.db.prepare(`
         SELECT COUNT(*) as total
         FROM (
           SELECT domain
-          FROM minute_dim_stats
-          WHERE backend_id = ? AND minute >= ? AND minute <= ? AND domain != '' ${whereSearch}
+          FROM ${resolved.table}
+          WHERE backend_id = ? AND ${resolved.timeCol} >= ? AND ${resolved.timeCol} <= ? AND domain != '' ${whereSearch}
           GROUP BY domain
         )
       `);
@@ -199,12 +243,12 @@ export class DomainRepository extends BaseRepository {
           SUM(upload) as totalUpload,
           SUM(download) as totalDownload,
           SUM(connections) as totalConnections,
-          MAX(minute) as lastSeen,
+          MAX(${resolved.timeCol}) as lastSeen,
           GROUP_CONCAT(DISTINCT ip) as ips,
           GROUP_CONCAT(DISTINCT rule) as rules,
           GROUP_CONCAT(DISTINCT chain) as chains
-        FROM minute_dim_stats
-        WHERE backend_id = ? AND minute >= ? AND minute <= ? AND domain != '' ${whereSearch}
+        FROM ${resolved.table}
+        WHERE backend_id = ? AND ${resolved.timeCol} >= ? AND ${resolved.timeCol} <= ? AND domain != '' ${whereSearch}
         GROUP BY domain
         ORDER BY ${rangeSortColumn} ${sortOrder}
         LIMIT ? OFFSET ?
@@ -298,11 +342,14 @@ export class DomainRepository extends BaseRepository {
   ): IPStats[] {
     const range = this.parseMinuteRange(start, end);
     if (range || sourceIP || sourceChain) {
+      const resolved = range ? this.resolveFactTable(start!, end!) : null;
+      const factTable = resolved?.table ?? 'minute_dim_stats';
+      const timeCol = resolved?.timeCol ?? 'minute';
       const conditions = ["m.backend_id = ?", "m.domain = ?", "m.ip != ''"];
       const params: Array<string | number> = [backendId, domain];
-      if (range) {
-        conditions.push("m.minute >= ?", "m.minute <= ?");
-        params.push(range.startMinute, range.endMinute);
+      if (resolved) {
+        conditions.push(`m.${timeCol} >= ?`, `m.${timeCol} <= ?`);
+        params.push(resolved.startKey, resolved.endKey);
       }
       if (sourceIP) {
         conditions.push("m.source_ip = ?");
@@ -320,7 +367,7 @@ export class DomainRepository extends BaseRepository {
           SUM(m.upload) as totalUpload,
           SUM(m.download) as totalDownload,
           SUM(m.connections) as totalConnections,
-          MAX(m.minute) as lastSeen,
+          MAX(m.${timeCol}) as lastSeen,
           COALESCE(i.asn, g.asn) as asn,
           CASE
             WHEN g.country IS NOT NULL THEN
@@ -337,7 +384,7 @@ export class DomainRepository extends BaseRepository {
           END as geoIP,
           GROUP_CONCAT(DISTINCT m.chain) as chains,
           GROUP_CONCAT(DISTINCT m.rule) as rules
-        FROM minute_dim_stats m
+        FROM ${factTable} m
         LEFT JOIN ip_stats i ON m.backend_id = i.backend_id AND m.ip = i.ip
         LEFT JOIN geoip_cache g ON m.ip = g.ip
         WHERE ${conditions.join(" AND ")}
@@ -391,11 +438,14 @@ export class DomainRepository extends BaseRepository {
   ): Array<{ chain: string; totalUpload: number; totalDownload: number; totalConnections: number }> {
     const range = this.parseMinuteRange(start, end);
     if (range || sourceIP || sourceChain) {
+      const resolved = range ? this.resolveFactTable(start!, end!) : null;
+      const factTable = resolved?.table ?? 'minute_dim_stats';
+      const timeCol = resolved?.timeCol ?? 'minute';
       const conditions = ["backend_id = ?", "domain = ?"];
       const params: Array<string | number> = [backendId, domain];
-      if (range) {
-        conditions.push("minute >= ?", "minute <= ?");
-        params.push(range.startMinute, range.endMinute);
+      if (resolved) {
+        conditions.push(`${timeCol} >= ?`, `${timeCol} <= ?`);
+        params.push(resolved.startKey, resolved.endKey);
       }
       if (sourceIP) {
         conditions.push("source_ip = ?");
@@ -412,7 +462,7 @@ export class DomainRepository extends BaseRepository {
           SUM(upload) as totalUpload,
           SUM(download) as totalDownload,
           SUM(connections) as totalConnections
-        FROM minute_dim_stats
+        FROM ${factTable}
         WHERE ${conditions.join(" AND ")}
         GROUP BY chain
         ORDER BY (SUM(upload) + SUM(download)) DESC
@@ -444,24 +494,25 @@ export class DomainRepository extends BaseRepository {
   ): DomainStats[] {
     const range = this.parseMinuteRange(start, end);
     if (range) {
+      const resolved = this.resolveFactTable(start!, end!);
       const stmt = this.db.prepare(`
         SELECT
           domain,
           SUM(upload) as totalUpload,
           SUM(download) as totalDownload,
           SUM(connections) as totalConnections,
-          MAX(minute) as lastSeen,
+          MAX(${resolved.timeCol}) as lastSeen,
           GROUP_CONCAT(DISTINCT ip) as ips
-        FROM minute_dim_stats
-        WHERE backend_id = ? AND minute >= ? AND minute <= ? AND (chain = ? OR chain LIKE ?) AND domain != ''
+        FROM ${resolved.table}
+        WHERE backend_id = ? AND ${resolved.timeCol} >= ? AND ${resolved.timeCol} <= ? AND (chain = ? OR chain LIKE ?) AND domain != ''
         GROUP BY domain
         ORDER BY (SUM(upload) + SUM(download)) DESC
         LIMIT ?
       `);
       const rows = stmt.all(
         backendId,
-        range.startMinute,
-        range.endMinute,
+        resolved.startKey,
+        resolved.endKey,
         chain,
         `${chain} > %`,
         limit,
@@ -525,25 +576,26 @@ export class DomainRepository extends BaseRepository {
   ): DomainStats[] {
     const range = this.parseMinuteRange(start, end);
     if (range) {
+      const resolved = this.resolveFactTable(start!, end!);
       const stmt = this.db.prepare(`
         SELECT
           domain,
           SUM(upload) as totalUpload,
           SUM(download) as totalDownload,
           SUM(connections) as totalConnections,
-          MAX(minute) as lastSeen,
+          MAX(${resolved.timeCol}) as lastSeen,
           GROUP_CONCAT(DISTINCT ip) as ips,
           GROUP_CONCAT(DISTINCT chain) as chains
-        FROM minute_dim_stats
-        WHERE backend_id = ? AND minute >= ? AND minute <= ? AND rule = ? AND domain != ''
+        FROM ${resolved.table}
+        WHERE backend_id = ? AND ${resolved.timeCol} >= ? AND ${resolved.timeCol} <= ? AND rule = ? AND domain != ''
         GROUP BY domain
         ORDER BY (SUM(upload) + SUM(download)) DESC
         LIMIT ?
       `);
       const rows = stmt.all(
         backendId,
-        range.startMinute,
-        range.endMinute,
+        resolved.startKey,
+        resolved.endKey,
         rule,
         limit,
       ) as Array<{

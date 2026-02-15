@@ -195,7 +195,9 @@ export class BackendRepository {
       this.db.prepare(`DELETE FROM connection_logs WHERE backend_id = ?`).run(id);
       this.db.prepare(`DELETE FROM minute_stats WHERE backend_id = ?`).run(id);
       this.db.prepare(`DELETE FROM minute_dim_stats WHERE backend_id = ?`).run(id);
+      this.db.prepare(`DELETE FROM hourly_dim_stats WHERE backend_id = ?`).run(id);
       this.db.prepare(`DELETE FROM minute_country_stats WHERE backend_id = ?`).run(id);
+      this.db.prepare(`DELETE FROM hourly_country_stats WHERE backend_id = ?`).run(id);
       this.db.prepare(`DELETE FROM domain_proxy_stats WHERE backend_id = ?`).run(id);
       this.db.prepare(`DELETE FROM ip_proxy_stats WHERE backend_id = ?`).run(id);
       this.db.prepare(`DELETE FROM device_stats WHERE backend_id = ?`).run(id);

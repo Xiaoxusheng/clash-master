@@ -20,7 +20,7 @@ import type {
   StatsSummary,
 } from "@neko-master/shared";
 
-type TrendTimeRange = "30m" | "1h" | "24h";
+type TrendTimeRange = "30m" | "1h" | "24h" | "today";
 type TrendGranularity = "minute" | "day";
 export type GlobalTimePreset = TimePreset;
 
@@ -56,17 +56,25 @@ function getMinuteBucket(durationMs: number): number {
   return 10;
 }
 
-function getTrendQuickOptions(durationMs: number): TrendTimeRange[] {
+function getTrendQuickOptions(durationMs: number, isToday = false): TrendTimeRange[] {
   const options: TrendTimeRange[] = [];
   if (durationMs >= THIRTY_MINUTES_MS) options.push("30m");
   if (durationMs >= ONE_HOUR_MS) options.push("1h");
   if (durationMs >= ONE_DAY_MS) options.push("24h");
+  if (isToday) options.push("today");
   return options;
 }
 
 function getQuickRangeMinutes(range: TrendTimeRange): number {
   if (range === "30m") return 30;
   if (range === "1h") return 60;
+  if (range === "today") {
+    // Calculate minutes from midnight to now
+    const now = new Date();
+    const midnight = new Date(now);
+    midnight.setHours(0, 0, 0, 0);
+    return Math.round((now.getTime() - midnight.getTime()) / 60000);
+  }
   return 1440;
 }
 
@@ -145,8 +153,8 @@ export function OverviewTab({
   );
 
   const trendTimeOptions = useMemo(
-    () => (canUseTrendSelector ? getTrendQuickOptions(globalDurationMs) : []),
-    [canUseTrendSelector, globalDurationMs],
+    () => (canUseTrendSelector ? getTrendQuickOptions(globalDurationMs, timePreset === "today") : []),
+    [canUseTrendSelector, globalDurationMs, timePreset],
   );
 
   useEffect(() => {
@@ -161,8 +169,15 @@ export function OverviewTab({
     let queryStart = parsedRange.start;
 
     if (canUseTrendSelector) {
-      const minutes = getQuickRangeMinutes(trendTimeRange);
-      queryStart = new Date(queryEnd.getTime() - minutes * 60 * 1000);
+      if (trendTimeRange === "today") {
+        // For "today", use midnight as start time
+        const midnight = new Date(queryEnd);
+        midnight.setHours(0, 0, 0, 0);
+        queryStart = midnight;
+      } else {
+        const minutes = getQuickRangeMinutes(trendTimeRange);
+        queryStart = new Date(queryEnd.getTime() - minutes * 60 * 1000);
+      }
     }
 
     if (queryStart > queryEnd) {

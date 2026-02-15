@@ -26,6 +26,7 @@ type PresetType =
   | "5m"
   | "15m"
   | "30m"
+  | "1h"
   | "24h"
   | "7d"
   | "30d"
@@ -68,6 +69,7 @@ function inferPresetFromRange(range: TimeRange): PresetType {
   if (diffMin === 5) return "5m";
   if (diffMin === 15) return "15m";
   if (diffMin === 30) return "30m";
+  if (diffMin === 60) return "1h";
   if (diffMin === 24 * 60) return "24h";
   if (diffMin === 7 * 24 * 60) return "7d";
   if (diffMin === 30 * 24 * 60) return "30d";
@@ -147,7 +149,7 @@ export function TimeRangePicker({
       value: Exclude<PresetType, "custom">;
       label: string;
     }> = [
-      { value: "30m", label: t("preset.30m") },
+      { value: "1h", label: t("preset.1h") },
       { value: "24h", label: t("preset.24h") },
       { value: "7d", label: t("preset.7d") },
       { value: "30d", label: t("preset.30d") },
@@ -160,6 +162,7 @@ export function TimeRangePicker({
       { value: "1m", label: t("preset.1m") },
       { value: "5m", label: t("preset.5m") },
       { value: "15m", label: t("preset.15m") },
+      { value: "30m", label: t("preset.30m") },
       ...stablePresets,
     ];
   }, [showDebugShortPresets, t]);
@@ -191,7 +194,8 @@ export function TimeRangePicker({
       !showDebugShortPresets &&
       (inferredPreset === "1m" ||
         inferredPreset === "5m" ||
-        inferredPreset === "15m")
+        inferredPreset === "15m" ||
+        inferredPreset === "30m")
         ? "custom"
         : inferredPreset;
     setSelectedPreset(normalizedPreset);
@@ -453,9 +457,10 @@ export function QuickTimePresets({
           { label: "1m", range: getPresetTimeRange("1m") },
           { label: "5m", range: getPresetTimeRange("5m") },
           { label: "15m", range: getPresetTimeRange("15m") },
+          { label: "30m", range: getPresetTimeRange("30m") },
         ]
       : []),
-    { label: "30m", range: getPresetTimeRange("30m") },
+    { label: "1h", range: getPresetTimeRange("1h") },
     { label: "24h", range: getPresetTimeRange("24h") },
     { label: "7d", range: getPresetTimeRange("7d") },
     { label: "30d", range: getPresetTimeRange("30d") },

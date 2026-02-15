@@ -23,15 +23,16 @@ export class RuleRepository extends BaseRepository {
   getRuleStats(backendId: number, start?: string, end?: string): RuleStats[] {
     const range = this.parseMinuteRange(start, end);
     if (range) {
+      const resolved = this.resolveFactTable(start!, end!);
       const stmt = this.db.prepare(`
         SELECT rule, MAX(chain) as finalProxy,
                SUM(upload) as totalUpload, SUM(download) as totalDownload,
-               SUM(connections) as totalConnections, MAX(minute) as lastSeen
-        FROM minute_dim_stats
-        WHERE backend_id = ? AND minute >= ? AND minute <= ?
+               SUM(connections) as totalConnections, MAX(${resolved.timeCol}) as lastSeen
+        FROM ${resolved.table}
+        WHERE backend_id = ? AND ${resolved.timeCol} >= ? AND ${resolved.timeCol} <= ?
         GROUP BY rule ORDER BY (SUM(upload) + SUM(download)) DESC
       `);
-      return stmt.all(backendId, range.startMinute, range.endMinute) as RuleStats[];
+      return stmt.all(backendId, resolved.startKey, resolved.endKey) as RuleStats[];
     }
 
     const stmt = this.db.prepare(`
@@ -59,15 +60,16 @@ export class RuleRepository extends BaseRepository {
   getRuleDomains(backendId: number, rule: string, limit = 50, start?: string, end?: string): DomainStats[] {
     const range = this.parseMinuteRange(start, end);
     if (range) {
+      const resolved = this.resolveFactTable(start!, end!);
       const stmt = this.db.prepare(`
         SELECT domain, SUM(upload) as totalUpload, SUM(download) as totalDownload,
-               SUM(connections) as totalConnections, MAX(minute) as lastSeen,
+               SUM(connections) as totalConnections, MAX(${resolved.timeCol}) as lastSeen,
                GROUP_CONCAT(DISTINCT ip) as ips, GROUP_CONCAT(DISTINCT chain) as chains
-        FROM minute_dim_stats
-        WHERE backend_id = ? AND minute >= ? AND minute <= ? AND rule = ? AND domain != ''
+        FROM ${resolved.table}
+        WHERE backend_id = ? AND ${resolved.timeCol} >= ? AND ${resolved.timeCol} <= ? AND rule = ? AND domain != ''
         GROUP BY domain ORDER BY (SUM(upload) + SUM(download)) DESC LIMIT ?
       `);
-      const rows = stmt.all(backendId, range.startMinute, range.endMinute, rule, limit) as Array<{
+      const rows = stmt.all(backendId, resolved.startKey, resolved.endKey, rule, limit) as Array<{
         domain: string; totalUpload: number; totalDownload: number; totalConnections: number;
         lastSeen: string; ips: string | null; chains: string | null;
       }>;
@@ -108,21 +110,22 @@ export class RuleRepository extends BaseRepository {
   getRuleIPs(backendId: number, rule: string, limit = 50, start?: string, end?: string): IPStats[] {
     const range = this.parseMinuteRange(start, end);
     if (range) {
+      const resolved = this.resolveFactTable(start!, end!);
       const stmt = this.db.prepare(`
         SELECT m.ip, SUM(m.upload) as totalUpload, SUM(m.download) as totalDownload,
-               SUM(m.connections) as totalConnections, MAX(m.minute) as lastSeen,
+               SUM(m.connections) as totalConnections, MAX(m.${resolved.timeCol}) as lastSeen,
                GROUP_CONCAT(DISTINCT CASE WHEN m.domain != '' THEN m.domain END) as domains,
                GROUP_CONCAT(DISTINCT m.chain) as chains,
                COALESCE(i.asn, g.asn) as asn,
                CASE WHEN g.country IS NOT NULL THEN json_array(g.country, COALESCE(g.country_name, g.country), COALESCE(g.city, ''), COALESCE(g.as_name, ''))
                     WHEN i.geoip IS NOT NULL THEN json(i.geoip) ELSE NULL END as geoIPData
-        FROM minute_dim_stats m
+        FROM ${resolved.table} m
         LEFT JOIN ip_stats i ON m.backend_id = i.backend_id AND m.ip = i.ip
         LEFT JOIN geoip_cache g ON m.ip = g.ip
-        WHERE m.backend_id = ? AND m.minute >= ? AND m.minute <= ? AND m.rule = ? AND m.ip != ''
+        WHERE m.backend_id = ? AND m.${resolved.timeCol} >= ? AND m.${resolved.timeCol} <= ? AND m.rule = ? AND m.ip != ''
         GROUP BY m.ip ORDER BY (SUM(m.upload) + SUM(m.download)) DESC LIMIT ?
       `);
-      const rows = stmt.all(backendId, range.startMinute, range.endMinute, rule, limit) as Array<{
+      const rows = stmt.all(backendId, resolved.startKey, resolved.endKey, rule, limit) as Array<{
         ip: string; totalUpload: number; totalDownload: number; totalConnections: number;
         lastSeen: string; domains: string | null; chains: string | null; asn: string | null; geoIPData: string | null;
       }>;
@@ -170,35 +173,39 @@ export class RuleRepository extends BaseRepository {
   getRuleDomainProxyStats(backendId: number, rule: string, domain: string, start?: string, end?: string): ProxyTrafficStats[] {
     const range = this.parseMinuteRange(start, end);
     if (range) {
+      const resolved = this.resolveFactTable(start!, end!);
       const stmt = this.db.prepare(`
         SELECT chain, SUM(upload) as totalUpload, SUM(download) as totalDownload, SUM(connections) as totalConnections
-        FROM minute_dim_stats
-        WHERE backend_id = ? AND minute >= ? AND minute <= ? AND rule = ? AND domain = ?
+        FROM ${resolved.table}
+        WHERE backend_id = ? AND ${resolved.timeCol} >= ? AND ${resolved.timeCol} <= ? AND rule = ? AND domain = ?
         GROUP BY chain ORDER BY (SUM(upload) + SUM(download)) DESC
       `);
-      return stmt.all(backendId, range.startMinute, range.endMinute, rule, domain) as ProxyTrafficStats[];
+      return stmt.all(backendId, resolved.startKey, resolved.endKey, rule, domain) as ProxyTrafficStats[];
     }
     return [];
   }
 
   getRuleDomainIPDetails(backendId: number, rule: string, domain: string, start?: string, end?: string, limit = 100): IPStats[] {
     const range = this.parseMinuteRange(start, end);
+    const resolved = range ? this.resolveFactTable(start!, end!) : null;
+    const factTable = resolved?.table ?? 'minute_dim_stats';
+    const timeCol = resolved?.timeCol ?? 'minute';
     const conditions = ["m.backend_id = ?", "m.rule = ?", "m.domain = ?", "m.ip != ''"];
     const params: Array<string | number> = [backendId, rule, domain];
-    if (range) {
-      conditions.push("m.minute >= ?", "m.minute <= ?");
-      params.push(range.startMinute, range.endMinute);
+    if (resolved) {
+      conditions.push(`m.${timeCol} >= ?`, `m.${timeCol} <= ?`);
+      params.push(resolved.startKey, resolved.endKey);
     }
 
     const stmt = this.db.prepare(`
       SELECT m.ip, GROUP_CONCAT(DISTINCT CASE WHEN m.domain != '' THEN m.domain END) as domains,
              SUM(m.upload) as totalUpload, SUM(m.download) as totalDownload,
-             SUM(m.connections) as totalConnections, MAX(m.minute) as lastSeen,
+             SUM(m.connections) as totalConnections, MAX(m.${timeCol}) as lastSeen,
              COALESCE(i.asn, g.asn) as asn,
              CASE WHEN g.country IS NOT NULL THEN json_array(g.country, COALESCE(g.country_name, g.country), COALESCE(g.city, ''), COALESCE(g.as_name, ''))
                   WHEN i.geoip IS NOT NULL THEN json(i.geoip) ELSE NULL END as geoIP,
              GROUP_CONCAT(DISTINCT m.chain) as chains
-      FROM minute_dim_stats m
+      FROM ${factTable} m
       LEFT JOIN ip_stats i ON m.backend_id = i.backend_id AND m.ip = i.ip
       LEFT JOIN geoip_cache g ON m.ip = g.ip
       WHERE ${conditions.join(" AND ")}
@@ -224,33 +231,37 @@ export class RuleRepository extends BaseRepository {
   getRuleIPProxyStats(backendId: number, rule: string, ip: string, start?: string, end?: string): ProxyTrafficStats[] {
     const range = this.parseMinuteRange(start, end);
     if (range) {
+      const resolved = this.resolveFactTable(start!, end!);
       const stmt = this.db.prepare(`
         SELECT chain, SUM(upload) as totalUpload, SUM(download) as totalDownload, SUM(connections) as totalConnections
-        FROM minute_dim_stats
-        WHERE backend_id = ? AND minute >= ? AND minute <= ? AND rule = ? AND ip = ?
+        FROM ${resolved.table}
+        WHERE backend_id = ? AND ${resolved.timeCol} >= ? AND ${resolved.timeCol} <= ? AND rule = ? AND ip = ?
         GROUP BY chain ORDER BY (SUM(upload) + SUM(download)) DESC
       `);
-      return stmt.all(backendId, range.startMinute, range.endMinute, rule, ip) as ProxyTrafficStats[];
+      return stmt.all(backendId, resolved.startKey, resolved.endKey, rule, ip) as ProxyTrafficStats[];
     }
     return [];
   }
 
   getRuleIPDomainDetails(backendId: number, rule: string, ip: string, start?: string, end?: string, limit = 100): DomainStats[] {
     const range = this.parseMinuteRange(start, end);
+    const resolved = range ? this.resolveFactTable(start!, end!) : null;
+    const factTable = resolved?.table ?? 'minute_dim_stats';
+    const timeCol = resolved?.timeCol ?? 'minute';
     const conditions = ["backend_id = ?", "rule = ?", "ip = ?", "domain != ''"];
     const params: Array<string | number> = [backendId, rule, ip];
-    if (range) {
-      conditions.push("minute >= ?", "minute <= ?");
-      params.push(range.startMinute, range.endMinute);
+    if (resolved) {
+      conditions.push(`${timeCol} >= ?`, `${timeCol} <= ?`);
+      params.push(resolved.startKey, resolved.endKey);
     }
 
     const stmt = this.db.prepare(`
       SELECT domain, GROUP_CONCAT(DISTINCT ip) as ips,
              SUM(upload) as totalUpload, SUM(download) as totalDownload,
-             SUM(connections) as totalConnections, MAX(minute) as lastSeen,
+             SUM(connections) as totalConnections, MAX(${timeCol}) as lastSeen,
              GROUP_CONCAT(DISTINCT CASE WHEN rule != '' THEN rule END) as rules,
              GROUP_CONCAT(DISTINCT chain) as chains
-      FROM minute_dim_stats WHERE ${conditions.join(" AND ")}
+      FROM ${factTable} WHERE ${conditions.join(" AND ")}
       GROUP BY domain ORDER BY (SUM(upload) + SUM(download)) DESC LIMIT ?
     `);
 
@@ -278,13 +289,14 @@ export class RuleRepository extends BaseRepository {
     let rows: Array<{ chain: string; totalUpload: number; totalDownload: number; totalConnections: number }>;
 
     if (range) {
+      const resolved = this.resolveFactTable(start!, end!);
       const stmt = this.db.prepare(`
         SELECT chain, SUM(upload) as totalUpload, SUM(download) as totalDownload, SUM(connections) as totalConnections
-        FROM minute_dim_stats
-        WHERE backend_id = ? AND minute >= ? AND minute <= ? AND rule = ? AND chain != ''
+        FROM ${resolved.table}
+        WHERE backend_id = ? AND ${resolved.timeCol} >= ? AND ${resolved.timeCol} <= ? AND rule = ? AND chain != ''
         GROUP BY chain
       `);
-      rows = stmt.all(backendId, range.startMinute, range.endMinute, rule) as typeof rows;
+      rows = stmt.all(backendId, resolved.startKey, resolved.endKey, rule) as typeof rows;
 
       const baselineStmt = this.db.prepare(`
         SELECT rule, chain, total_upload as totalUpload, total_download as totalDownload, total_connections as totalConnections
@@ -349,13 +361,14 @@ export class RuleRepository extends BaseRepository {
     let rows: Array<{ rule: string; chain: string; totalUpload: number; totalDownload: number; totalConnections: number }>;
 
     if (range) {
+      const resolved = this.resolveFactTable(start!, end!);
       const stmt = this.db.prepare(`
         SELECT rule, chain, SUM(upload) as totalUpload, SUM(download) as totalDownload, SUM(connections) as totalConnections
-        FROM minute_dim_stats
-        WHERE backend_id = ? AND minute >= ? AND minute <= ? AND rule != '' AND chain != ''
+        FROM ${resolved.table}
+        WHERE backend_id = ? AND ${resolved.timeCol} >= ? AND ${resolved.timeCol} <= ? AND rule != '' AND chain != ''
         GROUP BY rule, chain ORDER BY rule, chain
       `);
-      rows = stmt.all(backendId, range.startMinute, range.endMinute) as typeof rows;
+      rows = stmt.all(backendId, resolved.startKey, resolved.endKey) as typeof rows;
 
       const baselineStmt = this.db.prepare(`
         SELECT rule, chain, total_upload as totalUpload, total_download as totalDownload, total_connections as totalConnections
