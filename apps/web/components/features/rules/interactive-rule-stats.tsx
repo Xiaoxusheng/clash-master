@@ -42,6 +42,7 @@ import { DomainExpandedDetails, IPExpandedDetails } from "@/components/features/
 import { useIsWindows } from "@/lib/hooks/use-is-windows";
 import { ExpandReveal } from "@/components/ui/expand-reveal";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
+import { normalizeGeoIP } from "@neko-master/shared";
 import { UnifiedRuleChainFlow } from "@/components/features/rules/rule-chain-flow";
 import { InsightChartSkeleton, InsightDetailSectionSkeleton, InsightTableSkeleton, InsightThreePanelSkeleton } from "@/components/ui/insight-skeleton";
 import type { RuleStats, DomainStats, IPStats, StatsSummary } from "@neko-master/shared";
@@ -1586,6 +1587,8 @@ export function InteractiveRuleStats({
                           const isDesktopExpanded = expandedIP === ip.ip;
                           const isMobileActive = mobileIPDetailsOpen && mobileIPDetail?.ip === ip.ip;
                           const ipColor = getIPColor(ip.ip);
+                          const geo = normalizeGeoIP(ip.geoIP);
+                          const locationName = geo?.countryName || geo?.countryCode || null;
                           
                           return (
                             <div key={ip.ip} className="group">
@@ -1613,10 +1616,10 @@ export function InteractiveRuleStats({
 
                                 {/* Location */}
                                 <div className="col-span-2 flex items-center gap-1.5 min-w-0">
-                                    {ip.geoIP && ip.geoIP.length > 0 ? (
+                                    {locationName ? (
                                       <>
-                                        <CountryFlag country={ip.geoIP[0]} className="h-3.5 w-5" title={ip.geoIP[1] || ip.geoIP[0]} />
-                                      <span className="text-xs whitespace-nowrap">{ip.geoIP[1] || ip.geoIP[0]}</span>
+                                        <CountryFlag country={geo?.countryCode || "UN"} className="h-3.5 w-5" title={locationName} />
+                                      <span className="text-xs whitespace-nowrap">{locationName}</span>
                                     </>
                                   ) : (
                                     <span className="text-xs text-muted-foreground">-</span>
@@ -1682,10 +1685,10 @@ export function InteractiveRuleStats({
                                   </div>
                                   <div className="flex-1 min-w-0">
                                     <code className="text-sm font-medium truncate block">{ip.ip}</code>
-                                    {ip.geoIP && ip.geoIP.length > 0 && (
+                                    {locationName && (
                                       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                                        <CountryFlag country={ip.geoIP[0]} className="h-3.5 w-5" />
-                                        <span className="truncate">{ip.geoIP[1] || ip.geoIP[0]}</span>
+                                        <CountryFlag country={geo?.countryCode || "UN"} className="h-3.5 w-5" />
+                                        <span className="truncate">{locationName}</span>
                                       </div>
                                     )}
                                   </div>

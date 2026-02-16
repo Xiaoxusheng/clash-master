@@ -344,6 +344,8 @@ export function BackendConfigDialog({
   const [updatingRetention, setUpdatingRetention] = useState(false);
   const [geoLookupConfig, setGeoLookupConfig] = useState<GeoLookupConfig>({
     provider: "online",
+    configuredProvider: "online",
+    effectiveProvider: "online",
     mmdbDir: "/app/data/geoip",
     onlineApiUrl: "https://api.ipinfo.es/ipinfo",
     localMmdbReady: false,
@@ -508,6 +510,9 @@ export function BackendConfigDialog({
     }
     handleUpdateGeoLookupConfig({ provider });
   };
+
+  const selectedGeoLookupProvider =
+    geoLookupConfig.effectiveProvider ?? geoLookupConfig.provider;
 
   const handleUpdateRetention = async (
     key: keyof RetentionConfig,
@@ -1447,14 +1452,14 @@ export function BackendConfigDialog({
                   </p>
 
                   <RadioGroup
-                    value={geoLookupConfig.provider}
+                    value={selectedGeoLookupProvider}
                     onValueChange={handleGeoLookupProviderChange}
                     className="space-y-2"
                     disabled={updatingGeoLookup || isShowcase}>
                     <div
                       className={cn(
                         "flex items-center gap-2 rounded-md border p-3 transition-all",
-                        geoLookupConfig.provider === "online"
+                        selectedGeoLookupProvider === "online"
                           ? "border-primary bg-primary/5"
                           : "border-border hover:bg-muted/50",
                         !(updatingGeoLookup || isShowcase) && "cursor-pointer",
@@ -1471,7 +1476,7 @@ export function BackendConfigDialog({
                     <div
                       className={cn(
                         "flex items-center gap-2 rounded-md border p-3 transition-all",
-                        geoLookupConfig.provider === "local"
+                        selectedGeoLookupProvider === "local"
                           ? "border-primary bg-primary/5"
                           : "border-border hover:bg-muted/50",
                         !geoLookupConfig.localMmdbReady &&

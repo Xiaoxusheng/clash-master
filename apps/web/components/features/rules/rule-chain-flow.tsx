@@ -35,7 +35,8 @@ import { useTheme } from "next-themes";
 import { api, type TimeRange } from "@/lib/api";
 import { useStatsWebSocket } from "@/lib/websocket";
 import { useStableTimeRange } from "@/lib/hooks/use-stable-time-range";
-import { resolveActiveChains, type ActiveChainInfo } from "@/lib/active-chain";
+import { useIsWindows } from "@/lib/hooks/use-is-windows";
+import { resolveActiveChains, encodeActiveLinkKey, type ActiveChainInfo } from "@/lib/active-chain";
 import { useTranslations } from "next-intl";
 import type { StatsSummary } from "@neko-master/shared";
 import { useGatewayProviders, useGatewayProxies } from "@/hooks/api/use-gateway";
@@ -186,6 +187,7 @@ const MergedChainNodeComponent = memo(function MergedChainNodeComponent({
 }: {
   data: MergedChainNode & { dimmed?: boolean };
 }) {
+  const isWindows = useIsWindows();
   const dimmed = data.dimmed;
   const zeroTraffic = data._zeroTraffic;
   const wrapStyle: React.CSSProperties = {
@@ -211,7 +213,11 @@ const MergedChainNodeComponent = memo(function MergedChainNodeComponent({
             <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white bg-gradient-to-br from-emerald-400 to-emerald-600 shadow-sm">
               <Server className="h-4 w-4" />
             </div>
-            <span className="text-xs font-semibold truncate flex-1 text-emerald-800 dark:text-emerald-200 max-w-[120px]">
+            <span
+              className={cn(
+                "text-xs font-semibold truncate flex-1 text-emerald-800 dark:text-emerald-200 max-w-[120px]",
+                isWindows && "emoji-flag-font",
+              )}>
               {data.name}
             </span>
           </div>
@@ -237,7 +243,11 @@ const MergedChainNodeComponent = memo(function MergedChainNodeComponent({
             <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white bg-violet-500 shadow-sm">
               <Workflow className="h-4 w-4" />
             </div>
-            <span className="text-xs font-medium truncate flex-1 max-w-[120px]">
+            <span
+              className={cn(
+                "text-xs font-medium truncate flex-1 max-w-[120px]",
+                isWindows && "emoji-flag-font",
+              )}>
               {data.name}
             </span>
           </div>
@@ -275,7 +285,11 @@ const MergedChainNodeComponent = memo(function MergedChainNodeComponent({
           <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white bg-blue-500 shadow-sm">
             <Layers className="h-4 w-4" />
           </div>
-          <span className="text-xs font-medium truncate flex-1 max-w-[120px]">
+          <span
+            className={cn(
+              "text-xs font-medium truncate flex-1 max-w-[120px]",
+              isWindows && "emoji-flag-font",
+            )}>
             {data.name}
           </span>
         </div>
@@ -1174,7 +1188,7 @@ function UnifiedRuleChainFlowInner({
              activePolicyOnly || 
              isRuleLink || 
              isServerKnownLink ||
-             activeLinkKeys.has(`${srcNode.name}|${tgtNode.name}`);
+             activeLinkKeys.has(encodeActiveLinkKey(srcNode.name, tgtNode.name));
 
         if (shouldKeepLink) {
              const key = `${newSrc}-${newTgt}`;

@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-02-16
+
+### Added
+
+- **Chain-flow delimiter compatibility (Issue #34)**
+  - Rule/node names containing `|` are now supported in chain-flow graphs without key-splitting conflicts
+- **GeoIP config status fields**
+  - Added `configuredProvider` and `effectiveProvider` to `/api/db/geoip` responses to clearly separate configured vs. runtime-effective source
+- **Regression test coverage**
+  - Added `app.geoip-config.test.ts` for GeoIP config API behavior
+  - Added `db.geoip-normalization.test.ts` for GeoIP normalization compatibility
+  - Added chain-flow test coverage for names containing `|`
+
+### Changed
+
+- **GeoIP normalization moved to shared**
+  - Added `packages/shared/src/geo-ip-utils.ts` and unified `normalizeGeoIP` usage across frontend/backend
+  - Narrowed `IPStats.geoIP` to a structured object type and removed array-shape dependency
+  - Applied normalization consistently in collector IP-related query outputs for backward compatibility
+- **Config module refactor**
+  - Moved `/api/db/*` routes out of `app.ts` into a dedicated `config.controller`
+  - Added `autoListen` option to `createApp` for better testability and controlled startup
+- **GeoIP service reliability improvements**
+  - Reused MMDB required-file constants to avoid hardcoded filenames
+  - Added short TTL cache for MMDB missing-file checks to reduce repeated filesystem probes
+  - Added queue-overflow logging and `destroy()` resource cleanup
+  - Improved private IPv6 detection (including `::ffff:` mapped IPv4) and failure-cooldown handling
+
+### Fixed
+
+- **Fixed `/api/stats/rules/chain-flow-all` 500 errors**
+  - Resolved `Cannot read properties of undefined (reading 'name')` caused by delimiter-based link key parsing
+- **Fixed side effects when reading GeoIP config**
+  - `GET /api/db/geoip` no longer mutates persisted provider config
+  - Settings selection state now follows `effectiveProvider` to avoid UI/runtime mismatch
+- **Fixed Windows flag emoji rendering in React Flow chain nodes**
+  - Applied `emoji-flag-font` to rule/group/proxy node labels
+  - Unified active-link key encoding across backend/frontend to avoid ambiguous link matching
+
 ## [1.2.9] - 2026-02-16
 
 ### Added

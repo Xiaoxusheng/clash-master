@@ -17,10 +17,13 @@ import { SurgePolicySyncService } from './modules/surge/surge-policy-sync.js';
 import { BackendService, backendController } from './modules/backend/index.js';
 import { StatsService, statsController } from './modules/stats/index.js';
 import { AuthService, authController } from './modules/auth/index.js';
+import { configController } from './modules/config/index.js';
 
 // Extend Fastify instance to include services
 declare module 'fastify' {
   interface FastifyInstance {
+    db: StatsDatabase;
+    realtimeStore: RealtimeStore;
     backendService: BackendService;
     statsService: StatsService;
   }
@@ -32,10 +35,18 @@ export interface AppOptions {
   realtimeStore: RealtimeStore;
   logger?: boolean;
   policySyncService?: SurgePolicySyncService;
+  autoListen?: boolean;
 }
 
 export async function createApp(options: AppOptions) {
-  const { port, db, realtimeStore, logger = false, policySyncService } = options;
+  const {
+    port,
+    db,
+    realtimeStore,
+    logger = false,
+    policySyncService,
+    autoListen = true,
+  } = options;
   
   // Create Fastify instance
   const app = Fastify({ logger });
@@ -71,19 +82,12 @@ export async function createApp(options: AppOptions) {
   app.decorate('backendService', backendService);
   app.decorate('statsService', statsService);
   app.decorate('authService', authService);
+  app.decorate('db', db);
+  app.decorate('realtimeStore', realtimeStore);
 
   const getBackendIdFromQuery = (query: Record<string, unknown>): number | null => {
     const backendId = typeof query.backendId === 'string' ? query.backendId : undefined;
     return statsService.resolveBackendId(backendId);
-  };
-
-  const isValidHttpUrl = (value: string): boolean => {
-    try {
-      const url = new URL(value);
-      return url.protocol === 'http:' || url.protocol === 'https:';
-    } catch {
-      return false;
-    }
   };
 
   // ...
@@ -171,160 +175,6 @@ export async function createApp(options: AppOptions) {
 
   // Health check endpoint (not part of any module)
   app.get('/health', async () => ({ status: 'ok' }));
-
-  // Compatibility routes: DB management
-  app.get('/api/db/stats', async () => {
-    return {
-      size: db.getDatabaseSize(),
-      totalConnectionsCount: db.getTotalConnectionLogsCount(),
-    };
-  });
-
-  app.post('/api/db/cleanup', async (request, reply) => {
-    if (authService.isShowcaseMode()) {
-      return reply.status(403).send({ error: 'Forbidden' });
-    }
-
-    const body = request.body as { days?: number; backendId?: number };
-    const days = body?.days;
-    const backendId = typeof body?.backendId === 'number' ? body.backendId : undefined;
-
-    if (typeof days !== 'number' || days < 0) {
-      return reply.status(400).send({ error: 'Valid days parameter required' });
-    }
-
-    const result = db.cleanupOldData(backendId ?? null, days);
-
-    if (days === 0) {
-      if (backendId) {
-        realtimeStore.clearBackend(backendId);
-      } else {
-        const backends = db.getAllBackends();
-        for (const backend of backends) {
-          realtimeStore.clearBackend(backend.id);
-        }
-      }
-
-      return {
-        message: `Cleaned all data: ${result.deletedConnections} connections, ${result.deletedDomains} domains, ${result.deletedProxies} proxies`,
-        deleted: result.deletedConnections,
-        domains: result.deletedDomains,
-        ips: result.deletedIPs,
-        proxies: result.deletedProxies,
-        rules: result.deletedRules,
-      };
-    }
-
-    return {
-      message: `Cleaned ${result.deletedConnections} old connection logs`,
-      deleted: result.deletedConnections,
-    };
-  });
-
-  app.post('/api/db/vacuum', async (request, reply) => {
-    if (authService.isShowcaseMode()) {
-      return reply.status(403).send({ error: 'Forbidden' });
-    }
-
-    db.vacuum();
-    return { message: 'Database vacuumed successfully' };
-  });
-
-  app.get('/api/db/retention', async () => {
-    return db.getRetentionConfig();
-  });
-
-  app.put('/api/db/retention', async (request, reply) => {
-    if (authService.isShowcaseMode()) {
-      return reply.status(403).send({ error: 'Forbidden' });
-    }
-
-    const body = request.body as {
-      connectionLogsDays?: number;
-      hourlyStatsDays?: number;
-      autoCleanup?: boolean;
-    };
-
-    if (
-      body.connectionLogsDays !== undefined &&
-      (body.connectionLogsDays < 1 || body.connectionLogsDays > 90)
-    ) {
-      return reply.status(400).send({ error: 'connectionLogsDays must be between 1 and 90' });
-    }
-
-    if (
-      body.hourlyStatsDays !== undefined &&
-      (body.hourlyStatsDays < 7 || body.hourlyStatsDays > 365)
-    ) {
-      return reply.status(400).send({ error: 'hourlyStatsDays must be between 7 and 365' });
-    }
-
-    const config = db.updateRetentionConfig({
-      connectionLogsDays: body.connectionLogsDays,
-      hourlyStatsDays: body.hourlyStatsDays,
-      autoCleanup: body.autoCleanup,
-    });
-
-    return { message: 'Retention configuration updated', config };
-  });
-
-  app.get('/api/db/geoip', async () => {
-    const current = db.getGeoLookupConfig() as {
-      provider?: 'online' | 'local';
-      localMmdbReady?: boolean;
-    };
-
-    // Auto-fallback persisted config: if local is selected but required MMDB files are gone,
-    // switch back to online to keep UI/state consistent with effective runtime behavior.
-    if (current.provider === 'local' && current.localMmdbReady === false) {
-      return db.updateGeoLookupConfig({ provider: 'online' });
-    }
-
-    return current;
-  });
-
-  app.put('/api/db/geoip', async (request, reply) => {
-    if (authService.isShowcaseMode()) {
-      return reply.status(403).send({ error: 'Forbidden' });
-    }
-
-    const body = request.body as {
-      provider?: 'online' | 'local';
-      onlineApiUrl?: string;
-    };
-
-    if (body.provider !== undefined && body.provider !== 'online' && body.provider !== 'local') {
-      return reply.status(400).send({ error: "provider must be 'online' or 'local'" });
-    }
-
-    if (body.onlineApiUrl !== undefined) {
-      const trimmed = body.onlineApiUrl.trim();
-      if (!trimmed || !isValidHttpUrl(trimmed)) {
-        return reply.status(400).send({ error: 'onlineApiUrl must be a valid http/https URL' });
-      }
-      body.onlineApiUrl = trimmed;
-    }
-
-    if (body.provider === 'local') {
-      const current = db.getGeoLookupConfig() as {
-        localMmdbReady?: boolean;
-        missingMmdbFiles?: string[];
-      };
-      if (!current.localMmdbReady) {
-        return reply.status(400).send({
-          error: 'Local MMDB is not ready. Missing required files.',
-          missingMmdbFiles: current.missingMmdbFiles || [],
-        });
-      }
-    }
-
-    const config = db.updateGeoLookupConfig({
-      provider: body.provider,
-      onlineApiUrl: body.onlineApiUrl,
-    });
-
-    return { message: 'GeoIP configuration updated', config };
-  });
 
   // Compatibility routes: Gateway APIs
   app.get('/api/gateway/providers/proxies', async (request, reply) => {
@@ -603,13 +453,16 @@ export async function createApp(options: AppOptions) {
   await app.register(backendController, { prefix: '/api/backends' });
   await app.register(statsController, { prefix: '/api/stats' });
   await app.register(authController, { prefix: '/api/auth' });
+  await app.register(configController, { prefix: '/api/db' });
 
-  // Start server
-  await app.listen({ port, host: '0.0.0.0' });
-  console.log(`[API] Server running at http://localhost:${port}`);
+  if (autoListen) {
+    // Start server
+    await app.listen({ port, host: '0.0.0.0' });
+    console.log(`[API] Server running at http://localhost:${port}`);
 
-  // Start automatic health checks for upstream gateways
-  backendService.startHealthChecks();
+    // Start automatic health checks for upstream gateways
+    backendService.startHealthChecks();
+  }
 
   return app;
 }

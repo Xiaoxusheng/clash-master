@@ -175,6 +175,8 @@ export type GeoLookupProvider = "online" | "local";
 
 export interface GeoLookupConfig {
   provider: GeoLookupProvider;
+  configuredProvider: GeoLookupProvider;
+  effectiveProvider: GeoLookupProvider;
   mmdbDir: string;
   onlineApiUrl: string;
   localMmdbReady: boolean;
@@ -194,6 +196,8 @@ const DEFAULT_RETENTION_CONFIG = {
 
 const DEFAULT_GEO_LOOKUP_CONFIG: GeoLookupConfig = {
   provider: "online",
+  configuredProvider: "online",
+  effectiveProvider: "online",
   mmdbDir: "geoip",
   onlineApiUrl: "https://api.ipinfo.es/ipinfo",
   localMmdbReady: false,

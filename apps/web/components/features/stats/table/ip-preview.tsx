@@ -7,10 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { CountryFlag } from "@/components/features/countries/country-flag";
 import { cn } from "@/lib/utils";
+import { normalizeGeoIP, type GeoIPInfo } from "@neko-master/shared";
 
 interface IPPreviewProps {
   ip?: string | null;
-  geoIP?: string[] | null;
+  geoIP?: GeoIPInfo | null;
   asn?: string | null;
   unknownLabel: string;
   unavailableLabel: string;
@@ -45,10 +46,11 @@ export function IPPreview({
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ipText = ip || unknownLabel;
 
-  const countryCode = geoIP?.[0];
-  const countryName = geoIP?.[1];
-  const city = geoIP?.[2] || unavailableLabel;
-  const asOrganization = geoIP?.[3] || unavailableLabel;
+  const geo = normalizeGeoIP(geoIP);
+  const countryCode = geo?.countryCode;
+  const countryName = geo?.countryName;
+  const city = geo?.city || unavailableLabel;
+  const asOrganization = geo?.asOrganization || unavailableLabel;
   const asnValue = asn || unavailableLabel;
   const hasLocation = Boolean(countryCode || countryName);
   const displayLocation = countryName || countryCode || unavailableLabel;
@@ -149,7 +151,7 @@ export function IPPreview({
                 </p>
                 {hasLocation ? (
                   <span className="mt-1.5 flex min-w-0 items-center gap-1.5">
-                    <CountryFlag country={countryCode || countryName || "UN"} className="h-3.5 w-5" />
+                    <CountryFlag country={countryCode || "UN"} className="h-3.5 w-5" />
                     <span className="truncate text-sm font-medium leading-5">{displayLocation}</span>
                   </span>
                 ) : (

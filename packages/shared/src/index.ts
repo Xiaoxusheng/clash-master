@@ -1,3 +1,5 @@
+import type { GeoIPInfo } from "./geo-ip-utils.js";
+
 // Gateway Connection Metadata
 export interface ConnectionMetadata {
   network: string;
@@ -65,7 +67,7 @@ export interface IPStats {
   totalConnections: number;
   lastSeen: string;
   asn?: string;
-  geoIP?: string[];
+  geoIP?: GeoIPInfo;
   chains?: string[];
 }
 
@@ -316,3 +318,4 @@ export type BackendType = 'clash' | 'surge';
 
 // Gateway utilities
 export * from './gateway-utils.js';
+export * from './geo-ip-utils.js';

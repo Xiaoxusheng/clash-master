@@ -1,10 +1,14 @@
 import type { GatewayProvidersResponse, GatewayRulesResponse, GatewayProxiesResponse } from "./api";
 import { parseGatewayRule } from "@neko-master/shared";
 
+export function encodeActiveLinkKey(sourceName: string, targetName: string): string {
+  return JSON.stringify([sourceName, targetName]);
+}
+
 export interface ActiveChainInfo {
   /** Set of node names that are part of active chains */
   activeNodeNames: Set<string>;
-  /** Set of "sourceName|targetName" keys for active links */
+  /** Set of encoded [sourceName, targetName] keys for active links */
   activeLinkKeys: Set<string>;
   /** Map from proxy group name to its full active chain path */
   activeChains: Map<string, string[]>;
@@ -89,7 +93,7 @@ export function resolveActiveChains(
         activeNodeNames.add(name);
       }
       for (let i = 0; i < chain.length - 1; i++) {
-        activeLinkKeys.add(`${chain[i]}|${chain[i+1]}`);
+        activeLinkKeys.add(encodeActiveLinkKey(chain[i], chain[i + 1]));
       }
       return chain;
   };
@@ -121,7 +125,7 @@ export function resolveActiveChains(
             
             activeNodeNames.add(ruleName);
             if (groupChain.length > 0) {
-               activeLinkKeys.add(`${ruleName}|${groupChain[0]}`);
+               activeLinkKeys.add(encodeActiveLinkKey(ruleName, groupChain[0]));
             }
         }
       }

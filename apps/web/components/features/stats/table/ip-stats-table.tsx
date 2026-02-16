@@ -49,6 +49,7 @@ import {
   type IPSortKey,
   type SortOrder,
 } from "@/lib/stats-utils";
+import { normalizeGeoIP } from "@neko-master/shared";
 import type { IPStats } from "@neko-master/shared";
 const DETAIL_QUERY_STALE_MS = 30_000;
 
@@ -333,6 +334,8 @@ export function IPStatsTable({
               {paginatedIPs.map((ip) => {
                 const isDesktopExpanded = expandedIP === ip.ip;
                 const isMobileActive = mobileDetailsOpen && mobileDetailIP?.ip === ip.ip;
+                const geo = normalizeGeoIP(ip.geoIP);
+                const locationName = geo?.countryName || geo?.countryCode || null;
 
                 return (
                   <div key={ip.ip} className="group">
@@ -371,10 +374,10 @@ export function IPStatsTable({
                       )}
 
                       <div className={cn(locationColumnClass, "flex items-center gap-1.5 min-w-0")}>
-                        {ip.geoIP && ip.geoIP.length > 0 ? (
+                        {locationName ? (
                           <>
-                            <CountryFlag country={ip.geoIP[0]} className="h-3.5 w-5" title={ip.geoIP[1] || ip.geoIP[0]} />
-                            <span className="text-xs whitespace-nowrap">{ip.geoIP[1] || ip.geoIP[0]}</span>
+                            <CountryFlag country={geo?.countryCode || "UN"} className="h-3.5 w-5" title={locationName} />
+                            <span className="text-xs whitespace-nowrap">{locationName}</span>
                           </>
                         ) : (
                           <span className="text-xs text-muted-foreground">-</span>
@@ -467,10 +470,10 @@ export function IPStatsTable({
                       </div>
 
                       <div className="flex items-center gap-2 mb-2 pl-[30px] flex-wrap">
-                        {ip.geoIP && ip.geoIP.length > 0 && (
+                        {locationName && (
                           <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-                            <CountryFlag country={ip.geoIP[0]} className="h-3.5 w-5" />
-                            <span className="truncate">{ip.geoIP[1] || ip.geoIP[0]}</span>
+                            <CountryFlag country={geo?.countryCode || "UN"} className="h-3.5 w-5" />
+                            <span className="truncate">{locationName}</span>
                           </span>
                         )}
                         {showProxyColumn && ip.chains && ip.chains.length > 0 && (

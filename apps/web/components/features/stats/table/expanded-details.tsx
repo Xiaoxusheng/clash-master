@@ -7,6 +7,7 @@ import { Favicon } from "@/components/common";
 import { DomainPreview } from "@/components/features/domains";
 import { getDomainColor, getIPGradient } from "@/lib/stats-utils";
 import { formatBytes, formatNumber } from "@/lib/utils";
+import { normalizeGeoIP } from "@neko-master/shared";
 import type { DomainStats, IPStats, ProxyTrafficStats } from "@neko-master/shared";
 
 interface DomainExpandedDetailsProps {
@@ -384,11 +385,9 @@ export function DomainExpandedDetails({
           ) : ipDetails.length > 0 ? (
             <div className="space-y-2">
               {ipDetails.map((ipStat) => {
-                const country = ipStat.geoIP?.[0];
-                const location =
-                  ipStat.geoIP && ipStat.geoIP.length > 1
-                    ? ipStat.geoIP[1]
-                    : ipStat.geoIP?.[0] || null;
+                const geo = normalizeGeoIP(ipStat.geoIP);
+                const country = geo?.countryCode;
+                const location = geo?.countryName || geo?.countryCode || null;
                 const ipTraffic = ipStat.totalDownload + ipStat.totalUpload;
                 const percent = totalIPTraffic > 0 ? (ipTraffic / totalIPTraffic) * 100 : 0;
                 const downloadPercent = ipTraffic > 0 ? (ipStat.totalDownload / ipTraffic) * 100 : 0;
@@ -460,10 +459,11 @@ export function IPExpandedDetails({
   const domainsT = useTranslations("domains");
   const ipsT = useTranslations("ips");
 
-  const countryCode = ip.geoIP?.[0];
-  const countryName = ip.geoIP?.[1];
-  const city = ip.geoIP?.[2] || ipsT("unknown");
-  const asOrganization = ip.geoIP?.[3] || ipsT("unknown");
+  const geo = normalizeGeoIP(ip.geoIP);
+  const countryCode = geo?.countryCode;
+  const countryName = geo?.countryName;
+  const city = geo?.city || ipsT("unknown");
+  const asOrganization = geo?.asOrganization || ipsT("unknown");
   const asnValue = ip.asn || ipsT("unknown");
   const hasLocation = Boolean(countryCode || countryName);
   const displayLocation = countryName || countryCode || ipsT("unknown");

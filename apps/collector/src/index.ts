@@ -241,6 +241,7 @@ function shutdown() {
   // Stop servers
   wsServer?.stop();
   apiServer?.stop();
+  geoService?.destroy();
 
   // Close database
   db?.close();

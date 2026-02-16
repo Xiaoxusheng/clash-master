@@ -150,6 +150,36 @@ describe('StatsService', () => {
     });
   });
 
+  describe('getAllRuleChainFlows', () => {
+    it('should handle node names containing "|" in chain flow links', () => {
+      db.batchUpdateTrafficStats(backendId, [
+        {
+          domain: 'video.example.com',
+          ip: '203.0.113.10',
+          chain: 'JP-Sakura|IEPL',
+          chains: ['JP-Sakura|IEPL', 'Manual|Select', 'YouTube|Media'],
+          rule: 'RULE-SET',
+          rulePayload: 'YouTube',
+          upload: 123,
+          download: 456,
+          sourceIP: '192.168.1.88',
+          timestampMs: Date.now(),
+        },
+      ]);
+
+      const result = service.getAllRuleChainFlows(backendId, { active: false });
+
+      expect(result.nodes.some((node: { name: string }) => node.name === 'YouTube|Media')).toBe(true);
+      expect(result.links.length).toBeGreaterThan(0);
+      for (const link of result.links) {
+        expect(result.nodes[link.source]).toBeDefined();
+        expect(result.nodes[link.target]).toBeDefined();
+      }
+      expect(result.rulePaths['YouTube|Media']).toBeDefined();
+      expect(result.rulePaths['YouTube|Media'].linkIndices.length).toBeGreaterThan(0);
+    });
+  });
+
   describe('shouldIncludeRealtime', () => {
     it('should return true when no time range is active', () => {
       expect(service.shouldIncludeRealtime({ active: false })).toBe(true);

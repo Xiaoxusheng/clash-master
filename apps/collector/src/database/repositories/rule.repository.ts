@@ -20,6 +20,27 @@ export class RuleRepository extends BaseRepository {
     super(db);
   }
 
+  private encodeFlowLinkKey(sourceName: string, targetName: string): string {
+    return JSON.stringify([sourceName, targetName]);
+  }
+
+  private decodeFlowLinkKey(key: string): [sourceName: string, targetName: string] | null {
+    try {
+      const parsed = JSON.parse(key) as unknown;
+      if (
+        Array.isArray(parsed) &&
+        parsed.length === 2 &&
+        typeof parsed[0] === 'string' &&
+        typeof parsed[1] === 'string'
+      ) {
+        return [parsed[0], parsed[1]];
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
   getRuleStats(backendId: number, start?: string, end?: string): RuleStats[] {
     const range = this.parseMinuteRange(start, end);
     if (range) {
@@ -335,16 +356,23 @@ export class RuleRepository extends BaseRepository {
         node.totalConnections += row.totalConnections;
       }
       for (let i = 0; i < flowPath.length - 1; i++) {
-        linkSet.add(`${flowPath[i]}|${flowPath[i + 1]}`);
+        linkSet.add(this.encodeFlowLinkKey(flowPath[i], flowPath[i + 1]));
       }
     }
 
     const nodes = Array.from(nodeMap.values());
     const nodeIndexMap = new Map(nodes.map((n, i) => [n.name, i]));
-    const links = Array.from(linkSet).map(linkStr => {
-      const [sourceName, targetName] = linkStr.split('|');
-      return { source: nodeIndexMap.get(sourceName)!, target: nodeIndexMap.get(targetName)! };
-    });
+    const links = Array.from(linkSet)
+      .map(linkKey => {
+        const decoded = this.decodeFlowLinkKey(linkKey);
+        if (!decoded) return null;
+        const [sourceName, targetName] = decoded;
+        const source = nodeIndexMap.get(sourceName);
+        const target = nodeIndexMap.get(targetName);
+        if (source === undefined || target === undefined) return null;
+        return { source, target };
+      })
+      .filter((link): link is { source: number; target: number } => !!link);
 
     return { nodes, links };
   }
@@ -391,6 +419,8 @@ export class RuleRepository extends BaseRepository {
     const linkMap = new Map<string, Set<string>>();
     const rulePathNodes = new Map<string, Set<string>>();
     const rulePathLinks = new Map<string, Set<string>>();
+    const outgoingByNode = new Map<string, Set<string>>();
+    const incomingByNode = new Map<string, Set<string>>();
 
     for (const row of rows) {
       const rule = row.rule;
@@ -417,10 +447,17 @@ export class RuleRepository extends BaseRepository {
       }
 
       for (let i = 0; i < flowPath.length - 1; i++) {
-        const linkKey = `${flowPath[i]}|${flowPath[i + 1]}`;
+        const sourceName = flowPath[i];
+        const targetName = flowPath[i + 1];
+        const linkKey = this.encodeFlowLinkKey(sourceName, targetName);
         if (!linkMap.has(linkKey)) linkMap.set(linkKey, new Set());
         linkMap.get(linkKey)!.add(rule);
         rulePathLinks.get(rule)!.add(linkKey);
+
+        if (!outgoingByNode.has(sourceName)) outgoingByNode.set(sourceName, new Set());
+        outgoingByNode.get(sourceName)!.add(targetName);
+        if (!incomingByNode.has(targetName)) incomingByNode.set(targetName, new Set());
+        incomingByNode.get(targetName)!.add(sourceName);
       }
     }
 
@@ -433,8 +470,8 @@ export class RuleRepository extends BaseRepository {
       name === 'DIRECT' || name === 'REJECT' || name === 'REJECT-TINY';
 
     for (const [name, data] of nodeEntries) {
-      const hasOutgoing = Array.from(linkMap.keys()).some(k => k.startsWith(name + '|'));
-      const hasIncoming = Array.from(linkMap.keys()).some(k => k.endsWith('|' + name));
+      const hasOutgoing = (outgoingByNode.get(name)?.size ?? 0) > 0;
+      const hasIncoming = (incomingByNode.get(name)?.size ?? 0) > 0;
 
       if (!hasIncoming) {
         nodeTypeMap.set(name, 'rule');
@@ -472,11 +509,34 @@ export class RuleRepository extends BaseRepository {
     const nodeIndexMap = new Map(nodes.map((n, i) => [n.name, i]));
 
     const links = Array.from(linkMap.entries())
-      .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
       .map(([key, rules]) => {
-        const [sourceName, targetName] = key.split('|');
-        return { source: nodeIndexMap.get(sourceName)!, target: nodeIndexMap.get(targetName)!, rules: Array.from(rules) };
-      });
+        const decoded = this.decodeFlowLinkKey(key);
+        if (!decoded) return null;
+        const [sourceName, targetName] = decoded;
+        const source = nodeIndexMap.get(sourceName);
+        const target = nodeIndexMap.get(targetName);
+        if (source === undefined || target === undefined) return null;
+        return {
+          sourceName,
+          targetName,
+          source,
+          target,
+          rules: Array.from(rules),
+        };
+      })
+      .filter((link): link is {
+        sourceName: string;
+        targetName: string;
+        source: number;
+        target: number;
+        rules: string[];
+      } => !!link)
+      .sort((a, b) => {
+        const sourceDiff = a.sourceName.localeCompare(b.sourceName);
+        if (sourceDiff !== 0) return sourceDiff;
+        return a.targetName.localeCompare(b.targetName);
+      })
+      .map(({ source, target, rules }) => ({ source, target, rules }));
 
     const rulePaths: Record<string, { nodeIndices: number[]; linkIndices: number[] }> = {};
     for (const [rule, nodeNames] of rulePathNodes) {
@@ -486,7 +546,7 @@ export class RuleRepository extends BaseRepository {
       links.forEach((link, idx) => {
         const sourceName = nodes[link.source].name;
         const targetName = nodes[link.target].name;
-        if (linkKeys.has(`${sourceName}|${targetName}`)) linkIndices.push(idx);
+        if (linkKeys.has(this.encodeFlowLinkKey(sourceName, targetName))) linkIndices.push(idx);
       });
       rulePaths[rule] = { nodeIndices, linkIndices };
     }

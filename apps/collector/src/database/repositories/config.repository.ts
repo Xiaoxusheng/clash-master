@@ -17,7 +17,7 @@ interface DatabaseRetentionConfig {
 
 export type GeoLookupProvider = 'online' | 'local';
 
-interface GeoLookupConfig {
+export interface GeoLookupConfig {
   provider: GeoLookupProvider;
   mmdbDir: string;
   onlineApiUrl: string;
@@ -27,11 +27,19 @@ interface GeoLookupConfig {
 
 export class ConfigRepository extends BaseRepository {
   private dbPath: string;
-  private static readonly REQUIRED_MMDB_FILES = [
+  private mmdbStatusCache:
+    | {
+      dir: string;
+      checkedAt: number;
+      missingMmdbFiles: string[];
+    }
+    | null = null;
+  public static readonly REQUIRED_MMDB_FILES = [
     'GeoLite2-City.mmdb',
     'GeoLite2-ASN.mmdb',
   ] as const;
   private static readonly DEFAULT_MMDB_DIR = '/app/data/geoip';
+  private static readonly MMDB_STATUS_CACHE_TTL_MS = 5000;
 
   constructor(db: Database.Database, dbPath: string) {
     super(db);
@@ -107,9 +115,7 @@ export class ConfigRepository extends BaseRepository {
         : 'online');
 
     const mmdbDirValue = this.resolveMmdbDir();
-    const missingMmdbFiles = ConfigRepository.REQUIRED_MMDB_FILES.filter(
-      (file) => !fs.existsSync(path.join(mmdbDirValue, file)),
-    );
+    const missingMmdbFiles = this.getMissingMmdbFiles(mmdbDirValue);
 
     return {
       provider: providerValue,
@@ -121,6 +127,30 @@ export class ConfigRepository extends BaseRepository {
       localMmdbReady: missingMmdbFiles.length === 0,
       missingMmdbFiles,
     };
+  }
+
+  private getMissingMmdbFiles(mmdbDir: string): string[] {
+    const now = Date.now();
+    const cached = this.mmdbStatusCache;
+    if (
+      cached &&
+      cached.dir === mmdbDir &&
+      now - cached.checkedAt < ConfigRepository.MMDB_STATUS_CACHE_TTL_MS
+    ) {
+      return cached.missingMmdbFiles;
+    }
+
+    const missingMmdbFiles = ConfigRepository.REQUIRED_MMDB_FILES.filter(
+      (file) => !fs.existsSync(path.join(mmdbDir, file)),
+    );
+
+    this.mmdbStatusCache = {
+      dir: mmdbDir,
+      checkedAt: now,
+      missingMmdbFiles,
+    };
+
+    return missingMmdbFiles;
   }
 
   private resolveMmdbDir(): string {

@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
-import type { Connection, DomainStats, IPStats, HourlyStats, ProxyStats, RuleStats, ProxyTrafficStats, DeviceStats } from '@neko-master/shared';
+import { normalizeGeoIP, type Connection, type DomainStats, type IPStats, type HourlyStats, type ProxyStats, type RuleStats, type ProxyTrafficStats, type DeviceStats } from '@neko-master/shared';
 import { getAllSchemaStatements } from './database/schema.js';
 import {
   AuthRepository,
@@ -13,6 +13,8 @@ import {
   RuleRepository,
   IPRepository,
   ConfigRepository,
+  type GeoLookupConfig,
+  type GeoLookupProvider,
   TrafficWriterRepository,
   DomainRepository,
   BackendRepository,
@@ -42,6 +44,23 @@ export interface BackendConfig {
   listening: boolean;
   created_at: string;
   updated_at: string;
+}
+
+function normalizeIPStatsGeoIP(items: IPStats[]): IPStats[] {
+  return items.map((item) => {
+    const normalizedGeoIP = normalizeGeoIP(item.geoIP as unknown);
+    return {
+      ...item,
+      geoIP: normalizedGeoIP ?? undefined,
+    };
+  });
+}
+
+function normalizePaginatedIPStatsGeoIP(result: { data: IPStats[]; total: number }): { data: IPStats[]; total: number } {
+  return {
+    ...result,
+    data: normalizeIPStatsGeoIP(result.data),
+  };
 }
 
 export class StatsDatabase {
@@ -548,7 +567,11 @@ export class StatsDatabase {
       () => this.repos.domain.getDomainStatsPaginated(backendId, opts),
     );
   }
-  getDomainIPDetails(backendId: number, domain: string, start?: string, end?: string, limit?: number, sourceIP?: string, sourceChain?: string) { return this.repos.ip.getDomainIPDetails(backendId, domain, start, end, limit, sourceIP, sourceChain); }
+  getDomainIPDetails(backendId: number, domain: string, start?: string, end?: string, limit?: number, sourceIP?: string, sourceChain?: string) {
+    return normalizeIPStatsGeoIP(
+      this.repos.ip.getDomainIPDetails(backendId, domain, start, end, limit, sourceIP, sourceChain),
+    );
+  }
   getDomainProxyStats(backendId: number, domain: string, start?: string, end?: string, sourceIP?: string, sourceChain?: string) { return this.repos.domain.getDomainProxyStats(backendId, domain, start, end, sourceIP, sourceChain); }
 
   // ==================== IP ====================
@@ -558,10 +581,12 @@ export class StatsDatabase {
       [backendId, limit, start || '', end || ''],
       start,
       end,
-      () => this.repos.ip.getIPStats(backendId, limit, start, end),
+      () => normalizeIPStatsGeoIP(this.repos.ip.getIPStats(backendId, limit, start, end)),
     );
   }
-  getIPStatsByIPs(backendId: number, ips: string[]) { return this.repos.ip.getIPStatsByIPs(backendId, ips); }
+  getIPStatsByIPs(backendId: number, ips: string[]) {
+    return normalizeIPStatsGeoIP(this.repos.ip.getIPStatsByIPs(backendId, ips));
+  }
   getIPStatsPaginated(
     backendId: number,
     opts: { offset?: number; limit?: number; sortBy?: string; sortOrder?: string; search?: string; start?: string; end?: string } = {},
@@ -571,7 +596,7 @@ export class StatsDatabase {
       [backendId, opts.offset || 0, opts.limit || 50, opts.sortBy || '', opts.sortOrder || '', opts.search || '', opts.start || '', opts.end || ''],
       opts.start,
       opts.end,
-      () => this.repos.ip.getIPStatsPaginated(backendId, opts),
+      () => normalizePaginatedIPStatsGeoIP(this.repos.ip.getIPStatsPaginated(backendId, opts)),
     );
   }
   getIPDomainDetails(backendId: number, ip: string, start?: string, end?: string, limit?: number, sourceIP?: string, sourceChain?: string) { return this.repos.ip.getIPDomainDetails(backendId, ip, start, end, limit, sourceIP, sourceChain); }
@@ -583,7 +608,7 @@ export class StatsDatabase {
       [backendId, limit, start || '', end || ''],
       start,
       end,
-      () => this.repos.ip.getTopIPsLight(backendId, limit, start, end),
+      () => normalizeIPStatsGeoIP(this.repos.ip.getTopIPsLight(backendId, limit, start, end)),
     );
   }
   updateASNInfo(ip: string, asn: string, org: string) { this.repos.ip.updateASNInfo(ip, asn, org); }
@@ -655,7 +680,9 @@ export class StatsDatabase {
     );
   }
   getDeviceDomains(backendId: number, sourceIP: string, limit?: number, start?: string, end?: string) { return this.repos.device.getDeviceDomains(backendId, sourceIP, limit, start, end); }
-  getDeviceIPs(backendId: number, sourceIP: string, limit?: number, start?: string, end?: string) { return this.repos.device.getDeviceIPs(backendId, sourceIP, limit, start, end); }
+  getDeviceIPs(backendId: number, sourceIP: string, limit?: number, start?: string, end?: string) {
+    return normalizeIPStatsGeoIP(this.repos.device.getDeviceIPs(backendId, sourceIP, limit, start, end));
+  }
 
   // ==================== Proxy ====================
   getProxyStats(backendId: number, start?: string, end?: string) {
@@ -668,7 +695,9 @@ export class StatsDatabase {
     );
   }
   getProxyDomains(backendId: number, chain: string, limit?: number, start?: string, end?: string) { return this.repos.proxy.getProxyDomains(backendId, chain, limit, start, end); }
-  getProxyIPs(backendId: number, chain: string, limit?: number, start?: string, end?: string) { return this.repos.proxy.getProxyIPs(backendId, chain, limit, start, end); }
+  getProxyIPs(backendId: number, chain: string, limit?: number, start?: string, end?: string) {
+    return normalizeIPStatsGeoIP(this.repos.proxy.getProxyIPs(backendId, chain, limit, start, end));
+  }
 
   // ==================== Rule ====================
   getRuleStats(backendId: number, start?: string, end?: string) {
@@ -682,9 +711,13 @@ export class StatsDatabase {
   }
   getRuleProxyMap(backendId: number) { return this.repos.rule.getRuleProxyMap(backendId); }
   getRuleDomains(backendId: number, rule: string, limit?: number, start?: string, end?: string) { return this.repos.rule.getRuleDomains(backendId, rule, limit, start, end); }
-  getRuleIPs(backendId: number, rule: string, limit?: number, start?: string, end?: string) { return this.repos.rule.getRuleIPs(backendId, rule, limit, start, end); }
+  getRuleIPs(backendId: number, rule: string, limit?: number, start?: string, end?: string) {
+    return normalizeIPStatsGeoIP(this.repos.rule.getRuleIPs(backendId, rule, limit, start, end));
+  }
   getRuleDomainProxyStats(backendId: number, rule: string, domain: string, start?: string, end?: string) { return this.repos.rule.getRuleDomainProxyStats(backendId, rule, domain, start, end); }
-  getRuleDomainIPDetails(backendId: number, rule: string, domain: string, start?: string, end?: string, limit?: number) { return this.repos.rule.getRuleDomainIPDetails(backendId, rule, domain, start, end, limit); }
+  getRuleDomainIPDetails(backendId: number, rule: string, domain: string, start?: string, end?: string, limit?: number) {
+    return normalizeIPStatsGeoIP(this.repos.rule.getRuleDomainIPDetails(backendId, rule, domain, start, end, limit));
+  }
   getRuleIPProxyStats(backendId: number, rule: string, ip: string, start?: string, end?: string) { return this.repos.rule.getRuleIPProxyStats(backendId, rule, ip, start, end); }
   getRuleIPDomainDetails(backendId: number, rule: string, ip: string, start?: string, end?: string, limit?: number) { return this.repos.rule.getRuleIPDomainDetails(backendId, rule, ip, start, end, limit); }
   getRuleChainFlow(backendId: number, rule: string, start?: string, end?: string) { return this.repos.rule.getRuleChainFlow(backendId, rule, start, end); }
@@ -886,8 +919,8 @@ export class StatsDatabase {
   getTotalConnectionLogsCount() { return this.repos.config.getTotalConnectionLogsCount(); }
   getRetentionConfig() { return this.repos.config.getRetentionConfig(); }
   updateRetentionConfig(updates: { connectionLogsDays?: number; hourlyStatsDays?: number; autoCleanup?: boolean }) { return this.repos.config.updateRetentionConfig(updates); }
-  getGeoLookupConfig() { return this.repos.config.getGeoLookupConfig(); }
-  updateGeoLookupConfig(updates: { provider?: 'online' | 'local'; onlineApiUrl?: string }) {
+  getGeoLookupConfig(): GeoLookupConfig { return this.repos.config.getGeoLookupConfig(); }
+  updateGeoLookupConfig(updates: { provider?: GeoLookupProvider; onlineApiUrl?: string }): GeoLookupConfig {
     return this.repos.config.updateGeoLookupConfig(updates);
   }
   vacuum() { this.repos.config.vacuum(); }
@@ -923,5 +956,7 @@ export class StatsDatabase {
     this.db.close();
   }
 }
+
+export type { GeoLookupConfig, GeoLookupProvider };
 
 export default StatsDatabase;

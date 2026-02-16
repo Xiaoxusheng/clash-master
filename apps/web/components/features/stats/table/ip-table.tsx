@@ -33,6 +33,7 @@ import type { IPStats, StatsSummary } from "@neko-master/shared";
 import { api, type TimeRange } from "@/lib/api";
 import { useStableTimeRange } from "@/lib/hooks/use-stable-time-range";
 import { useStatsWebSocket } from "@/lib/websocket";
+import { normalizeGeoIP } from "@neko-master/shared";
 import {
   getIPDomainDetailsQueryKey,
   getIPProxyStatsQueryKey,
@@ -430,6 +431,8 @@ export function IPsTable({
             const ipColor = getIPColor(ip.ip);
             const isDesktopExpanded = expandedIP === ip.ip;
             const isMobileActive = mobileDetailsOpen && mobileDetailIP?.ip === ip.ip;
+            const geo = normalizeGeoIP(ip.geoIP);
+            const locationName = geo?.countryName || geo?.countryCode || null;
 
             return (
               <div key={ip.ip} className="group">
@@ -471,11 +474,11 @@ export function IPsTable({
 
                   {/* Location */}
                   <div className="col-span-2 flex items-center min-w-0">
-                    {ip.geoIP && ip.geoIP.length > 0 ? (
+                    {locationName ? (
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <CountryFlag country={ip.geoIP[0]} className="h-3.5 w-5" title={ip.geoIP[1] || ip.geoIP[0]} />
+                        <CountryFlag country={geo?.countryCode || "UN"} className="h-3.5 w-5" title={locationName} />
                         <span className="text-xs whitespace-nowrap">
-                          {ip.geoIP[1] || ip.geoIP[0]}
+                          {locationName}
                         </span>
                       </div>
                     ) : (
@@ -585,11 +588,11 @@ export function IPsTable({
 
                   {/* Row 2: Location + Proxy tag */}
                   <div className="flex items-center gap-2 mb-2 pl-[30px] flex-wrap">
-                    {ip.geoIP && ip.geoIP.length > 0 && (
+                    {locationName && (
                       <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-                        <CountryFlag country={ip.geoIP[0]} className="h-3.5 w-5" />
+                        <CountryFlag country={geo?.countryCode || "UN"} className="h-3.5 w-5" />
                         <span className="truncate">
-                          {ip.geoIP[1] || ip.geoIP[0]}
+                          {locationName}
                         </span>
                       </span>
                     )}

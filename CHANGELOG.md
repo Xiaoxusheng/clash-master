@@ -7,6 +7,45 @@
 
 ## [未发布]
 
+## [1.3.0] - 2026-02-16
+
+### 新增
+
+- **链路图分隔符兼容（Issue #34）**
+  - 链路流向图现在支持规则名/节点名中包含 `|` 字符，不再因分隔符冲突导致构图失败
+- **GeoIP 配置状态字段增强**
+  - `/api/db/geoip` 响应新增 `configuredProvider` 与 `effectiveProvider`，明确“已配置来源”与“实际生效来源”
+- **回归测试补充**
+  - 新增 `app.geoip-config.test.ts`（GeoIP 配置 API 行为）
+  - 新增 `db.geoip-normalization.test.ts`（GeoIP 归一化兼容）
+  - 新增规则链分隔符场景测试，覆盖 `|` 名称链路构建
+
+### 变更
+
+- **GeoIP 归一化能力下沉到 shared**
+  - 新增 `packages/shared/src/geo-ip-utils.ts`，统一前后端 `normalizeGeoIP`
+  - `IPStats.geoIP` 类型收敛为结构化对象，移除数组形态依赖
+  - Collector 多个 IP 相关查询统一做 GeoIP 归一化返回，兼容历史数据
+- **配置模块工程化重构**
+  - 将 `/api/db/*` 路由从 `app.ts` 抽离到独立 `config.controller`
+  - `createApp` 新增 `autoListen` 选项，便于集成测试和可控启动
+- **GeoIP 服务稳定性增强**
+  - MMDB 必需文件名复用配置常量，减少硬编码
+  - 增加 MMDB 缺失状态短 TTL 缓存，降低频繁文件系统探测开销
+  - 增加队列溢出日志、`destroy()` 资源释放能力
+  - 优化私网 IPv6 判断（含 `::ffff:` 映射 IPv4）与失败冷却策略
+
+### 修复
+
+- **修复 `/api/stats/rules/chain-flow-all` 500 错误**
+  - 解决 `Cannot read properties of undefined (reading 'name')` 异常，根因是链路 key 使用字符串分隔导致解析错位
+- **修复 GeoIP 配置读取副作用**
+  - 读取 `/api/db/geoip` 不再隐式改写已保存配置（side-effect free）
+  - 设置页按 `effectiveProvider` 显示选中态，避免“配置值”和“实际值”视觉不一致
+- **修复 React Flow 规则链节点在 Windows 下国旗 emoji 显示**
+  - 规则/分组/代理节点名称补齐 `emoji-flag-font` 适配
+  - 前后端 active link key 编码方式统一，避免链路匹配歧义
+
 ## [1.2.9] - 2026-02-16
 
 ### 新增

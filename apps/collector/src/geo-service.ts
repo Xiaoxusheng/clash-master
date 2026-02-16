@@ -7,6 +7,7 @@ import maxmind, {
   type Reader,
 } from "maxmind";
 import type { StatsDatabase } from "./db.js";
+import { ConfigRepository, type GeoLookupConfig } from "./database/repositories/config.repository.js";
 
 export interface GeoLocation {
   country: string;
@@ -17,13 +18,6 @@ export interface GeoLocation {
   as_domain: string;
   continent: string;
   continent_name: string;
-}
-
-interface GeoLookupConfig {
-  provider: "online" | "local";
-  mmdbDir: string;
-  onlineApiUrl: string;
-  localMmdbReady?: boolean;
 }
 
 interface GeoIPApiResponse {
@@ -72,6 +66,7 @@ export class GeoIPService {
   private static FAILED_IPS_CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
   private static ONLINE_MIN_REQUEST_INTERVAL_MS = 100;
   private static LOCAL_MMDB_RECHECK_INTERVAL_MS = 60 * 1000;
+  private static COUNTRY_MMDB_FILE = "GeoLite2-Country.mmdb";
 
   constructor(db: StatsDatabase) {
     this.db = db;
@@ -91,13 +86,10 @@ export class GeoIPService {
       };
     }
 
-    const failedAt = this.failedIPs.get(ip);
-    if (failedAt && Date.now() - failedAt < GeoIPService.FAIL_COOLDOWN_MS) {
-      return null;
-    }
-
     const cached = this.db.getIPGeolocation(ip);
     if (cached) {
+      // Cache hit should always win over previous transient failures.
+      this.failedIPs.delete(ip);
       return {
         country: cached.country,
         country_name: cached.country_name,
@@ -108,6 +100,11 @@ export class GeoIPService {
         continent: cached.continent,
         continent_name: cached.continent_name,
       };
+    }
+
+    const failedAt = this.failedIPs.get(ip);
+    if (failedAt && Date.now() - failedAt < GeoIPService.FAIL_COOLDOWN_MS) {
+      return null;
     }
 
     const pending = this.pendingQueries.get(ip);
@@ -127,6 +124,9 @@ export class GeoIPService {
 
   private async queryWithQueue(ip: string): Promise<GeoLocation | null> {
     if (this.queue.length >= GeoIPService.MAX_QUEUE_SIZE) {
+      console.warn(
+        `[GeoIP] Queue overflow, dropping lookup for ${ip}. Max queue size: ${GeoIPService.MAX_QUEUE_SIZE}`,
+      );
       return null;
     }
     return new Promise((resolve) => {
@@ -148,7 +148,7 @@ export class GeoIPService {
 
   private getRequestIntervalMs(): number {
     try {
-      const config = this.db.getGeoLookupConfig() as GeoLookupConfig;
+      const config = this.db.getGeoLookupConfig();
       const useLocal = config.provider === "local" && config.localMmdbReady !== false;
       return useLocal ? 0 : GeoIPService.ONLINE_MIN_REQUEST_INTERVAL_MS;
     } catch {
@@ -190,7 +190,7 @@ export class GeoIPService {
   }
 
   private async queryGeo(ip: string): Promise<GeoLocation | null> {
-    const config = this.db.getGeoLookupConfig() as GeoLookupConfig;
+    const config = this.db.getGeoLookupConfig();
     const useLocal = config.provider === "local" && config.localMmdbReady !== false;
     if (useLocal) {
       const localResult = await this.queryLocalMMDB(ip, config);
@@ -253,6 +253,7 @@ export class GeoIPService {
           };
 
         this.db.saveIPGeolocation(ip, geo);
+        this.failedIPs.delete(ip);
         return geo;
       } finally {
         clearTimeout(timeout);
@@ -329,6 +330,7 @@ export class GeoIPService {
       };
 
       this.db.saveIPGeolocation(ip, geo);
+      this.failedIPs.delete(ip);
       return geo;
     } catch (err) {
       console.error(`[GeoIP] Local MMDB query failed for ${ip}:`, err);
@@ -378,13 +380,14 @@ export class GeoIPService {
   }
 
   private async loadLocalMmdbReaders(mmdbDir: string): Promise<LocalMmdbReaders | null> {
-    const cityPath = path.join(mmdbDir, "GeoLite2-City.mmdb");
-    const asnPath = path.join(mmdbDir, "GeoLite2-ASN.mmdb");
-    const countryPath = path.join(mmdbDir, "GeoLite2-Country.mmdb");
+    const [cityMmdbFile, asnMmdbFile] = ConfigRepository.REQUIRED_MMDB_FILES;
+    const cityPath = path.join(mmdbDir, cityMmdbFile);
+    const asnPath = path.join(mmdbDir, asnMmdbFile);
+    const countryPath = path.join(mmdbDir, GeoIPService.COUNTRY_MMDB_FILE);
 
     if (!fs.existsSync(cityPath) || !fs.existsSync(asnPath)) {
       console.error(
-        `[GeoIP] Missing MMDB file(s) in ${mmdbDir}. Required: GeoLite2-City.mmdb, GeoLite2-ASN.mmdb`,
+        `[GeoIP] Missing MMDB file(s) in ${mmdbDir}. Required: ${ConfigRepository.REQUIRED_MMDB_FILES.join(", ")}`,
       );
       return null;
     }
@@ -474,17 +477,23 @@ export class GeoIPService {
       /^100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\./,
     ];
 
-    if (ip.includes(":")) {
+    const normalized = ip.toLowerCase();
+    if (normalized.includes(":")) {
+      if (normalized === "::1") {
+        return true;
+      }
+      if (normalized.startsWith("::ffff:")) {
+        const mappedIPv4 = normalized.slice("::ffff:".length);
+        return privateRanges.some((range) => range.test(mappedIPv4));
+      }
       return (
-        ip.startsWith("fc") ||
-        ip.startsWith("fd") ||
-        ip.startsWith("fe80") ||
-        ip.startsWith("::1") ||
-        ip === "::1"
+        normalized.startsWith("fc") ||
+        normalized.startsWith("fd") ||
+        normalized.startsWith("fe80")
       );
     }
 
-    return privateRanges.some((range) => range.test(ip));
+    return privateRanges.some((range) => range.test(normalized));
   }
 
   private sleep(ms: number): Promise<void> {
@@ -493,7 +502,7 @@ export class GeoIPService {
 
   async bulkQueryIPs(ips: string[]): Promise<void> {
     const uniqueIPs = [...new Set(ips)].filter((ip) => !this.isPrivateIP(ip));
-    const config = this.db.getGeoLookupConfig() as GeoLookupConfig;
+    const config = this.db.getGeoLookupConfig();
     const useLocal = config.provider === "local" && config.localMmdbReady !== false;
     const delayMs = useLocal ? 0 : 150;
 
@@ -506,5 +515,23 @@ export class GeoIPService {
         }
       }
     }
+  }
+
+  destroy(): void {
+    if (this.processorTimer) {
+      clearTimeout(this.processorTimer);
+      this.processorTimer = null;
+    }
+
+    for (const item of this.queue) {
+      item.resolve(null);
+    }
+    this.queue = [];
+
+    this.pendingQueries.clear();
+    this.failedIPs.clear();
+    this.localMmdbLoadPromise = null;
+    this.localMmdbReaders = null;
+    this.isProcessing = false;
   }
 }
